@@ -1,20 +1,49 @@
-#![feature(panic_info_message)]
+//! The main module and entrypoint
+//!
+//! Various facilities of the kernels are implemented as submodules. The most
+//! important ones are:
+//!
+//! - [`trap`]: Handles all cases of switching from userspace to the kernel
+//! - [`syscall`]: System call handling and implementation
+//!
+//! The operating system also starts in this module. Kernel code starts
+//! executing from `entry.asm`, after which [`rust_main()`] is called to
+//! initialize various pieces of functionality. (See its source code for
+//! details.)
+//!
+//! We then call [`batch::run_next_app()`] and for the first time go to
+//! userspace.
+// #![warn(missing_docs)]
+// #![deny(warnings)] // 把警告处理成错误
+
+#![no_std] // 不用标准库，用核心库core
 #![no_main]
 // start 语义项代表了标准库 std 在执行应用程序之前需要进行的一些初始化工作。
 // 由于我c们禁用了标准库，编译器也就找不到这项功能的实现了。 
 // 通过禁止main函数，就没有了所谓的初始化操作
-#![no_std] // 不用标准库，用核心库core
+#![feature(panic_info_message)]
+
+use core::arch::{global_asm,asm};
+use log::{debug, error, info, trace, warn};
 #[macro_use]
 mod console;
-use log::{debug, error, info, trace, warn};
-use logging::init_Log;
+mod sync;
 mod logging;
 mod lang_items;
 mod sbi;// 用户最小化环境构建
-use core::arch::global_asm;
+pub mod syscall;
+pub mod trap;
+pub mod batch;
+mod stack_trace;
+use logging::init_Log;
+
 use crate::sbi::shutdown;
+
 global_asm!(include_str!("entry.asm"));
 // 把entry.asm变成字符串通过global_asm嵌入到代码中
+global_asm!(include_str!("link_app.S"));
+// 一开始这个文件并没有，但是通过rustc的参数-Zbuild-std=core,std，编译器会自动生成link_app.S文件
+// 因为注释的问题，
 
 //1. 在 rust_main 函数的开场白中，我们将第一次在栈上分配栈帧并保存函数调用上下文，它也是内核运行全程中最底层的栈帧。
 //1.1 在内核初始化中，需要先完成对 .bss 段的清零
@@ -22,10 +51,15 @@ global_asm!(include_str!("entry.asm"));
 //2. 没有返回值的函数。rust没return的函数默认返回`()` ，不是!类型
 #[no_mangle] //防止编译器更改这里定义的名字
 pub fn rust_main() -> !{ 
+
     clear_bss();    // 给栈初始化
+
     init_Log();     // 日志初始化
     pre_section();  // 输出段信息
 
+    trap::init();
+    batch::init();
+    batch::run_next_app();
     // ----------------------------正常退出--------------------------
     println!("/n----end----/n");
     shutdown(false)

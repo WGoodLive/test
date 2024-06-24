@@ -1,9 +1,7 @@
 // os/src/lang_items.rs
 use core::panic::PanicInfo;
 // 编译指导属性，用于标记核心库core中的 panic! 宏要对接的函数
-use crate::{println, sbi::shutdown};
-
-
+use crate::sbi::shutdown;
 /*
 panic! 宏最典型的应用场景包括
     断言宏 assert! 失败或者对 Option::None/Result::Err 进行 unwrap 操作。
@@ -11,10 +9,15 @@ panic! 宏最典型的应用场景包括
 */
 #[panic_handler]  // 发生错误时候，调用下面的函数
 fn panic(_info:&PanicInfo) -> !{ // core包里处理异常的
+
     if let Some(location) = _info.location(){
-        println!("\n发生错误，位置:{}:{} 错误信息:{}",
+
+        println!("\nFile:{}:{},cause:{}",
         location.file(),location.line(),_info.message().unwrap()
         );
+        unsafe{
+            crate::stack_trace::print_stack_trace();
+        }
     }else{
         println!("Panicked:{}",_info.message().unwrap());
     }

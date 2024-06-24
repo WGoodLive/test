@@ -15,4 +15,5 @@ fn main()->i32{
         asm!("sret");
     }
     0
+    // panic!("ddd"); // 调用操作系统的panic，不会用自己的
 }

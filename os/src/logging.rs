@@ -38,7 +38,9 @@ impl Log for Mylogger {
 pub fn init_Log(){
     // static LOGGER: SimpleLogger = SimpleLogger;
     log::set_logger(&Mylogger).unwrap();  // 自定义日志
-    log::set_max_level(match option_env!("Log") {
+    log::set_max_level(match option_env!("LOG") {
+        // 什么也不输入，就不打印日志
+        // make run Log=Trace 过滤这个等级
         Some("ERROR") => LevelFilter::Error,
         Some("WARN") => LevelFilter::Warn,
         Some("INFO") => LevelFilter::Info,

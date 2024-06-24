@@ -37,8 +37,12 @@ $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 kernel:
+	@cd ../user && make build
 	@echo Platform: $(BOARD)
+	@cp src/linker-$(BOARD).ld src/linker.ld
 	@cargo build $(MODE_ARG)
+	@rm src/linker.ld
+
 
 clean:
 	@cargo clean
@@ -53,21 +57,22 @@ disasm-vim: kernel
 
 run: run-inner
 
+QEMU_ARGS := -machine virt \
+			 -nographic \
+			 -bios $(BOOTLOADER) \
+			 -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)
+
 run-inner: build
-	@qemu-system-riscv64 \
-		-machine virt \
-		-nographic \
-		-bios $(BOOTLOADER) \
-		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)
+	@qemu-system-riscv64 $(QEMU_ARGS)
 
 debug: build
 	@tmux new-session -d \
-		"qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S" && \
+		"qemu-system-riscv64 $(QEMU_ARGS) -s -S" && \
 		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
 		tmux -2 attach-session -d
 
 gdbserver: build
-	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
+	@qemu-system-riscv64 $(QEMU_ARGS) -s -S
 
 gdbclient:
 	@riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'

@@ -12,11 +12,14 @@ mod syscall;
 // 我的理解：
 // make build的时候，顺便把第一个软件bin/xx.rs加载到了指定位置，
 // 然后,bin/xx.rs的main作为作为强链接，就没lib.rs的main啥事了
+
+// 链接器里面链接地址可以随便设定，都可以qemu-riscv64
+// 尽管这里改，都可以随便运行，但是为了自己的操作系统也可以运行这个，需要设置个绝对地址、
+// 我们也许可以将二进制文件生成为位置无关的，但是内核在加载的时候根据其实际加载的位置可能需要对二进制文件中的某些符号进行动态重定位，这大概需要更加完善的二进制文件解析和修改功能，对于我们教学内核来说完全没有必要。目前这种直接拷贝的方法还是比较简单且恰当
 #[no_mangle]
 #[link_section = ".text.entry"]
 pub extern "C" fn _start() -> !{
     clear_bss();
-    println!("Hello, world!");
     exit(main());
     panic!("unreachable after sys_exit!");
 }
