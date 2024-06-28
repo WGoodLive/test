@@ -184,7 +184,7 @@ pub fn run_next_app()->!{
                 APP_BASE_ADDRESS, 
                 USER_STACK.get_sp(),  
             )
-        ) as *const _ as usize);
+        ) as *const _ as usize); // 程序开始
     }
 
     panic!("unreachable in batch::currect_app!");

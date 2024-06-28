@@ -5,7 +5,6 @@ const SYSCALL_WRITE:usize = 64;
 const SYSCALL_EXIT:usize = 93;
 
 
-
 // args:[usize;3]
 // 一个包含三个无符号整数的数组
 fn syscall(id:usize,args:[usize;3]) -> isize { 
@@ -42,6 +41,7 @@ pub fn sys_write(fd: usize, buf: &[u8]) -> isize {
 pub fn sys_exit(xstate:i32)->isize{
     syscall(SYSCALL_EXIT, [xstate as usize, 0, 0])
 }
+
 
 
 

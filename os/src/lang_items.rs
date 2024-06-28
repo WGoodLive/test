@@ -15,9 +15,7 @@ fn panic(_info:&PanicInfo) -> !{ // core包里处理异常的
         println!("\nFile:{}:{},cause:{}",
         location.file(),location.line(),_info.message().unwrap()
         );
-        unsafe{
-            crate::stack_trace::print_stack_trace();
-        }
+        crate::stack_trace::print_stack_trace();
     }else{
         println!("Panicked:{}",_info.message().unwrap());
     }

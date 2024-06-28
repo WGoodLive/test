@@ -1,7 +1,7 @@
-use core::{arch::asm, ptr};
+use core::{arch::asm};
 use log::*;
 
-pub unsafe fn print_stack_trace()->(){
+pub fn print_stack_trace()->(){
     unsafe{
         let mut a : *const usize;
         asm!("mv {},fp",out(reg) a);

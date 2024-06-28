@@ -12,7 +12,7 @@ fn main()->i32{
     println!("Kernel will kill this application!");
 
     unsafe{
-        asm!("sret");
+        asm!("sret"); // 会出错
     }
     0
     // panic!("ddd"); // 调用操作系统的panic，不会用自己的

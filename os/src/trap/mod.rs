@@ -1,7 +1,7 @@
 pub mod context;
 
-use crate::batch::run_next_app;
-use core::arch::global_asm;
+use crate::{batch::run_next_app, sbi::shutdown};
+use core::arch::{global_asm,asm};
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
 };
@@ -34,16 +34,20 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
             run_next_app();
         }
         // 如果打开了2_5priv_inst.rs,但是这个异常操作系统不处理(下面代码注释掉)，就是直接panic，结束shutdown
-        Trap::Exception(Exception::IllegalInstruction)=>{
-            println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            run_next_app();
-        }
+        // Trap::Exception(Exception::IllegalInstruction)=>{
+        //     println!("[kernel] IllegalInstruction in application, kernel killed it.");
+        //     run_next_app();
+        // }
 
         _ =>{
+            let fp: usize;
+            unsafe {
+                asm!("mv {}, fp", out(reg) fp,);
+            }
             panic!(
-                "Unsupported trap {:?}, stval = {:#x}!",
+                "Unsupported trap {:?}, stval = {:#x}.",
                 scause.cause(),
-                stval
+                stval,
             ); // 任何代码一旦panic,不可恢复
         }
     }

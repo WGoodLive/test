@@ -603,3 +603,71 @@ ld t0, 32*8(sp)
     sret
 ```
 
+## 本章疑问
+
+```rust
+...
+main.rs
+...
+
+use riscv::register::time;
+fn ptime() -> (){
+    unsafe {
+        let t = time::read();
+        print!("start!!!");
+        println!("start----:{}",1000);
+    }
+}
+
+/*
+为什么这个代码写在main.rs的文件里面，进行定义，并在rust_main函数里面使用，会报错
+但是，如果这个函数ptime声明为模块，就不会报错
+
+同样的问题，我发现许多模块化的代码，都不能写在rust_main的文件中定义，一使用就报错
+*/
+```
+
+
+
+#### 2 代码设计问题
+
+**试验证明：**
+
+rust_main里面print_stack_info的终止地址是0x0,
+但是其他模块的print_stack_info的终止地址都是0x1
+
+**如下：**
+
+如果print_stack_info使用0x0作为终止地址：
+
+main.rs里面的print_stack_info引起的未被处理的trap,然后会被定义为storefault,然后被处理
+
+但是其他文件在print_stack_info引起的未被处理trap，然后会被定义为loadfault,这个在第二章，这个异常未被捕获，然后不断panic！(`程序引起一个不被处理的trap,就会panic!，panic里面使用print_stack_info，打印堆栈，但是如果打印堆栈的时候，又引起一个不被处理的trap，又会panic,如此就导致没有递归深度的panic+print_stack_info`)
+
+
+
+## 本章拓展
+
+### time
+
+主要就是使用了`riscv::register::time`的`time::read()`获得了时间，然后在`sys_exit`处打印时间和`trap/mod.rs`里面的`trap_handler`处打印时间(这里的时间是cpu一次处理)
+
+### 补充
+
+1. 我一直好奇，为什么os/下面就是特权级别，但是user/下面就是用户级别，到底是那部分在约束？亦或者说，你不是特权级别，到底是谁在报错用户级？
+
+2. 什么东西处理让Linux能识别riscv的汇编语言？或者说，是哪部分能识别riscv的汇编语言？
+3. 什么东西把rust高级语言转换成riscv的汇编语言？
+4. ...
+
+**下面这几个东西之间的联系和区别是啥呢：**
+
+sbi_rt
+
+rustsbi_bootloader
+
+qemu
+
+riscv64gc-unknown-none-elf
+
+qemu-system-riscv64

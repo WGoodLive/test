@@ -35,6 +35,7 @@ pub mod syscall;
 pub mod trap;
 pub mod batch;
 mod stack_trace;
+
 use logging::init_Log;
 
 use crate::sbi::shutdown;
@@ -56,7 +57,10 @@ pub fn rust_main() -> !{
 
     init_Log();     // 日志初始化
     pre_section();  // 输出段信息
-
+    // unsafe {
+    //     let t = time::read();
+    //     info!("start:{}",t);
+    // }
     trap::init();
     batch::init();
     batch::run_next_app();
@@ -154,6 +158,7 @@ fn clear_bss(){
     (sbss as usize..ebss as usize).for_each(|a|{
         unsafe{(a as *mut u8 ).write_volatile(0)} // 字节置0
     });
+
 }
 // 尽管 ! 类型表示函数不会返回，但它并不等同于 void（在 C 或 C++ 中的概念）。在 Rust 中，void 类型是不存在的；所有函数都必须有一个返回类型，即使这个类型是 !。此外，! 类型也不能用作其他类型的子类型（即它不是一个“bottom type”），这意味着你不能将一个返回 ! 的函数赋值给一个期望返回其他类型的变量。
 /* 
