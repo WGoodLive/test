@@ -1,6 +1,7 @@
 use riscv::register::sstatus::{self,Sstatus,SPP};
 
 #[repr(C)] // 按C语言的内存布局来定义结构体
+
 /// Trap上下文
 pub struct TrapContext {
     pub x: [usize; 32], // 32个通用寄存器

@@ -1,6 +1,6 @@
 pub mod context;
 
-use crate::batch::run_next_app;
+use crate::task::run_next_app;
 use core::arch::global_asm;
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
@@ -38,6 +38,12 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
             println!("[kernel] IllegalInstruction in application, kernel killed it.");
             run_next_app();
         }
+
+        Trap::Exception(Exception::LoadFault)=>{
+            println!("[kernel] LoadFault in application, kernel killed it.");
+            run_next_app();
+        }
+
 
         _ =>{
             panic!(

@@ -36,7 +36,7 @@ pub mod trap;
 pub mod config;
 // pub mod batch; // 应用加载 + 执行切换
 mod loader; // 应用加载
-mod task;
+pub mod task;
 mod stack_trace;
 use logging::init_Log;
 
@@ -60,9 +60,9 @@ pub fn rust_main() -> !{
     init_Log();     // 日志初始化
     pre_section();  // 输出段信息
 
+
     trap::init();
-    batch::init();
-    batch::run_next_app();
+    task::run_next_app();
     // ----------------------------正常退出--------------------------
     println!("/n----end----/n");
     shutdown(false)
@@ -138,11 +138,14 @@ fn pre_section(){
         fn sdata();
         fn ebss();
         fn sbss();
+        fn app_0_start();
+        fn app_1_start();
     }
     info!(".text [{:#x},{:#x})",stext as usize,etext as usize);
     info!(".rodata [{:#x},{:#x})",srodata as usize,erodata as usize);
     info!(".data [{:#x},{:#x})",sdata as usize,edata as usize);
     info!(".bss [{:#x},{:#x})",sbss as usize,ebss as usize);
+    info!(".app0 [{:#x},{:#x})",app_0_start as usize,app_1_start as usize);
 }
 
 

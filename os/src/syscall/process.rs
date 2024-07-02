@@ -1,4 +1,4 @@
-use crate::batch::*;
+use crate::task::*;
 
 pub fn sys_exit(xstate: i32) -> ! {
     println!("[kernel] Application exited with code {}", xstate);
