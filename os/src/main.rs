@@ -33,7 +33,10 @@ mod lang_items;
 mod sbi;// 用户最小化环境构建
 pub mod syscall;
 pub mod trap;
-pub mod batch;
+pub mod config;
+// pub mod batch; // 应用加载 + 执行切换
+mod loader; // 应用加载
+mod task;
 mod stack_trace;
 use logging::init_Log;
 

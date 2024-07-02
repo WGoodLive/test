@@ -671,3 +671,15 @@ qemu
 riscv64gc-unknown-none-elf
 
 qemu-system-riscv64
+
+### 发现问题
+
+在makefile中，Rust只会根据`.rs`文件是否变更，决定是否重建，如果，你直接修改`.ld`文件，不会让`user/bin`目录下的应用程序重建，
+
+`.bin`文件的加载，是将源代码加载进内存，但是`.ld`文件负责加载程序的`symbol`，没有符号，程序无法执行，报错:`无法找到函数体范围`。
+
+cargo clean清理user程序，然后使用build.py重新编译生成user程序。cargo build 貌似不会跟踪ld文件改动。
+
+不支持加载应用到内存中的任意地址运行
+
+**上面的这个问题，非常重要，关系到ch3的代码**
