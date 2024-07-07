@@ -1,10 +1,10 @@
 # 用于生成linker-ld
 import os;
 base_address = 0x80400000
-step = 0x200000
-linker = "src/linker.ld"
+step = 0x20000
+linker = 'src/linker.ld'
 
-app_id = 3
+app_id = 0
 apps = os.listdir("src/bin")
 apps.sort()
 for app in apps:

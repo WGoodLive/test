@@ -24,7 +24,9 @@
 #![feature(panic_info_message)]
 
 use core::arch::{global_asm,asm};
+use loader::load_apps;
 use log::{debug, error, info, trace, warn};
+// 使用宏
 #[macro_use]
 mod console;
 mod sync;
@@ -34,97 +36,15 @@ mod sbi;// 用户最小化环境构建
 pub mod syscall;
 pub mod trap;
 pub mod config;
+pub mod task;
 // pub mod batch; // 应用加载 + 执行切换
-mod loader; // 应用加载
-mod task;
-mod stack_trace;
-use logging::init_Log;
-
-use crate::sbi::shutdown;
+pub mod loader; // 应用加载
 
 global_asm!(include_str!("entry.asm"));
 // 把entry.asm变成字符串通过global_asm嵌入到代码中
 global_asm!(include_str!("link_app.S"));
 // 一开始这个文件并没有，但是通过rustc的参数-Zbuild-std=core,std，编译器会自动生成link_app.S文件
 // 因为注释的问题，
-
-//1. 在 rust_main 函数的开场白中，我们将第一次在栈上分配栈帧并保存函数调用上下文，它也是内核运行全程中最底层的栈帧。
-//1.1 在内核初始化中，需要先完成对 .bss 段的清零
-//1.2 我们就在 rust_main 的开头完成这一工作，由于控制权已经被转交给 Rust 
-//2. 没有返回值的函数。rust没return的函数默认返回`()` ，不是!类型
-#[no_mangle] //防止编译器更改这里定义的名字
-pub fn rust_main() -> !{ 
-
-    clear_bss();    // 给栈初始化
-
-    init_Log();     // 日志初始化
-    pre_section();  // 输出段信息
-
-    trap::init();
-    batch::init();
-    batch::run_next_app();
-    // ----------------------------正常退出--------------------------
-    println!("/n----end----/n");
-    shutdown(false)
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 #[no_mangle]
@@ -168,6 +88,78 @@ extern "C" fn _start(){ // 必须是 _start
     }; 
 }
 */
+
+
+//1. 在 rust_main 函数的开场白中，我们将第一次在栈上分配栈帧并保存函数调用上下文，它也是内核运行全程中最底层的栈帧。
+//1.1 在内核初始化中，需要先完成对 .bss 段的清零
+//1.2 我们就在 rust_main 的开头完成这一工作，由于控制权已经被转交给 Rust 
+//2. 没有返回值的函数。rust没return的函数默认返回`()` ，不是!类型
+#[no_mangle] //防止编译器更改这里定义的名字
+pub fn rust_main() -> !{ 
+
+    clear_bss();    // 给栈初始化
+    println!("main start...");
+    trap::init();
+    loader::load_apps();
+    task::run_first_task();
+    // ----------------------------正常退出--------------------------
+    panic!("main error...");
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

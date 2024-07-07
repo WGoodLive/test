@@ -1,5 +1,12 @@
 // 内核与 RustSBI 通信的相关功能实现在子模块 sbi 中
 
+/// use sbi call to getchar from console (qemu uart handler)
+#[allow(unused)]
+pub fn console_getchar() -> usize {
+    #[allow(deprecated)]
+    sbi_rt::legacy::console_getchar()
+}
+
 
 pub fn console_putchar(c:usize){
     #[allow(deprecated)]

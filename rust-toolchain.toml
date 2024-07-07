@@ -1,5 +1,6 @@
 [toolchain]
 profile = "minimal"
 # use the nightly version of the last stable toolchain, see <https://forge.rust-lang.org/>
-channel = "nightly-2024-02-25"
-components = ["rust-src", "llvm-tools-preview", "rustfmt", "clippy"]
+channel = "nightly-2024-05-01"
+components = ["rust-src", "llvm-tools", "rustfmt", "clippy"]
+targets = ["riscv64gc-unknown-none-elf"]

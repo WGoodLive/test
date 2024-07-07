@@ -51,3 +51,8 @@ pub fn write(fd:usize,buf:&[u8]) ->isize{
 pub fn exit(exit_code: i32) -> isize {
     sys_exit(exit_code)
 }
+
+//  yield 是 Rust 的关键字，因此我们只能将应用直接调用的接口命名为 yield_ 。
+pub fn yield_()->isize{
+    sys_yield()
+}

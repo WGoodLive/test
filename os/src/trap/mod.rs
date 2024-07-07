@@ -1,18 +1,19 @@
 pub mod context;
 
-use crate::batch::run_next_app;
-use core::arch::global_asm;
+
+use core::{arch::global_asm, task};
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
 };
 pub use context::TrapContext;
 
-use crate::syscall::syscall;
+use crate::{syscall::syscall, task::{exit_current_and_run_next, TASK_MANAGER}};
 
 global_asm!(include_str!("trap.S"));
 
 
 pub fn init(){
+    println!("trap start...");
     extern "C" {fn __alltraps();}
     unsafe{
         stvec::write(__alltraps as usize, TrapMode::Direct);
@@ -31,12 +32,14 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
         }
         Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault)=>{
             println!("[kernel] PageFault in application, kernel killed it.");
-            run_next_app();
+            panic!("[kernel] Cannot continue!");
+            // exit_current_and_run_next();
         }
         // 如果打开了2_5priv_inst.rs,但是这个异常操作系统不处理(下面代码注释掉)，就是直接panic，结束shutdown
         Trap::Exception(Exception::IllegalInstruction)=>{
             println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            run_next_app();
+            panic!("[kernel] Cannot continue!");
+            // exit_current_and_run_next();
         }
 
         _ =>{
