@@ -213,3 +213,18 @@ git checkout ch3_1
 > - Copy 是一个标记 Trait，决定该类型在按值传参/赋值的时候采用移动语义还是复制语义.
 
 ![../_images/fsm-coop.png](./assets/fsm-coop.png)
+
+#### 解决问题
+
+我在书写始初龙代码的时候，代码始终无法正常运行，后面我发现问题在于
+
+```ASM
+# os/Trap/trap.S
+
+__restore:
+	mov sp,a0 
+```
+
+第四行代码一定要注释掉，因为a0是函数参数，在`__switch`函数中，这个参数就是`current_task_cx_ptr`,如果你不注释这句话，你一切的`__switch`都是无用功，因为ra,sp就这两个参数改变了，但是ra是共同的，但是你sp没换过来。
+
+并且`run_first_app`的时候，current_task_cx_ptr为0,也就是sp=0,直接非法指令报错
