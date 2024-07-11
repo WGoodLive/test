@@ -37,7 +37,7 @@ pub mod config;
 // pub mod batch; // 应用加载 + 执行切换
 mod loader; // 应用加载
 pub mod task;
-mod stack_trace;
+
 use logging::init_Log;
 
 use crate::sbi::shutdown;
@@ -62,6 +62,7 @@ pub fn rust_main() -> !{
 
 
     trap::init();
+    loader::loader();
     task::run_next_app();
     // ----------------------------正常退出--------------------------
     println!("/n----end----/n");

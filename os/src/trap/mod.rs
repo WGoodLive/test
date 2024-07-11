@@ -44,6 +44,10 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
             run_next_app();
         }
 
+        Trap::Exception(Exception::InstructionFault)=>{
+            println!("[kernel] InstructionFault in application, kernel killed it.");
+            run_next_app();
+        }
 
         _ =>{
             panic!(

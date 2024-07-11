@@ -6,16 +6,14 @@ use lazy_static::*;
 use crate::trap::TrapContext;
 lazy_static!{
     static ref APP_NUM:UPSafeCell<usize> = {
-
         unsafe{UPSafeCell::new(0)}
     };
 }
 
 /// run next app
 pub fn run_next_app()->!{
-    loader();
     let mut t = APP_NUM.exclusive_access(); 
-    if(*t>=2){
+    if(*t>=3){
         shutdown(false)
     }
     drop(t);
