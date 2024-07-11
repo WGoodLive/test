@@ -57,28 +57,40 @@ pub fn loader(){
     for i in 0..num_app{
         unsafe {
             let base_i = get_base_i(i);
-            let app_src = core::slice::from_raw_parts(
-                app_start[i] as *const u8,
-                app_start[i+1] - app_start[i]
-            );
 
-            // 法1
-            core::slice::from_raw_parts_mut(base_i as *mut u8, APP_SIZE_LIMIT).fill(0);
-            // 法2
-            // (base_i..base_i+APP_SIZE_LIMIT).for_each(|addr|{
-            //     unsafe {
-            //         (addr as *mut u8).write_volatile(0)
-            //     }
-            // });
-            let app_dst = core::slice::from_raw_parts_mut(
-                base_i as *mut u8, 
-                app_src.len()
-            );
-            app_dst.copy_from_slice(app_src);
+         // clear region
+
+         (base_i..base_i + APP_SIZE_LIMIT).for_each(|addr| unsafe {
+
+             (addr as *mut u8).write_volatile(0)
+
+         });
+
+         // load app from data section to memory
+
+         let src = unsafe {
+
+             core::slice::from_raw_parts(
+
+                 app_start[i] as *const u8,
+
+                 app_start[i + 1] - app_start[i]
+
+             )
+
+         };
+
+         let dst = unsafe {
+
+             core::slice::from_raw_parts_mut(base_i as *mut u8, src.len())
+
+         };
+
+         dst.copy_from_slice(src);
         }        
-        unsafe {
-            asm!("fence.i");
-        }
+    }
+    unsafe {
+        asm!("fence.i");
     }
 }
 

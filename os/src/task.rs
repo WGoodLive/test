@@ -13,14 +13,14 @@ lazy_static!{
 /// run next app
 pub fn run_next_app()->!{
     let mut t = APP_NUM.exclusive_access(); 
-    if(*t>=3){
+    if(*t>=get_num_app()){
         shutdown(false)
     }
-    drop(t);
+
     extern "C"{
         fn __restore(cx_addr: usize); // 函数声明
     }
-
+    drop(t);
     unsafe{
         // 这个代码有点抽象在于，他没有保存寄存器
         // 因为是直接加载新程序，除了函数入口，栈帧，其他的东西统统不用保存
