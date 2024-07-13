@@ -1,10 +1,11 @@
 pub mod context;
 
-
-use core::{arch::global_asm, task};
+use crate::timer::set_next_trigger;
+use core::{arch::global_asm, f32::INFINITY, task};
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
 };
+use riscv::register::scause::Interrupt;
 pub use context::TrapContext;
 
 use crate::{syscall::syscall, task::{exit_current_and_run_next, TASK_MANAGER}};
@@ -41,6 +42,10 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
             panic!("[kernel] Cannot continue!");
             // exit_current_and_run_next();
         }
+        Trap::Interrupt(Interrupt::SupervisorTimer)=>{
+            set_next_trigger();
+            crate::task::suspend_current_and_run_next();
+        }
 
         _ =>{
             panic!(
@@ -51,4 +56,12 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
         }
     }
     cx
+}
+
+use riscv::register::sie;
+
+pub fn enable_timer_interrupt(){
+    unsafe {
+        sie::set_stimer();
+    }
 }

@@ -2,9 +2,11 @@ mod context;
 mod switch;
 #[allow(clippy::module_inception)] // 允许跳过重复警告
 mod task;
+use crate::sbi::shutdown;
 use crate::sync::UPSafeCell;
 use crate::config::*;
 use lazy_static::*;
+use log::warn;
 use switch::__switch;
 use crate::loader::*;
 use context::*;
@@ -52,7 +54,8 @@ impl TaskManager {
             }
         }
         else {
-            panic!("All applications completed!");
+            warn!("All applications completed!");
+            shutdown(false);
         }
 
     }

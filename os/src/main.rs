@@ -23,15 +23,21 @@
 // 通过禁止main函数，就没有了所谓的初始化操作
 #![feature(panic_info_message)]
 
+// 定义了一个模块board，并且指定了该模块的路径为boards/qemu.rs
+#[path = "boards/qemu.rs"]
+mod board;
+
 use core::arch::{global_asm,asm};
 use loader::load_apps;
 use log::{debug, error, info, trace, warn};
+use logging::init_Log;
 // 使用宏
 #[macro_use]
 mod console;
 mod sync;
 mod logging;
 mod lang_items;
+mod timer;
 mod sbi;// 用户最小化环境构建
 pub mod syscall;
 pub mod trap;
@@ -98,9 +104,12 @@ extern "C" fn _start(){ // 必须是 _start
 pub fn rust_main() -> !{ 
 
     clear_bss();    // 给栈初始化
+    pre_section();
+    init_Log();
     println!("main start...");
     trap::init();
     loader::load_apps();
+    timer::init_timer();
     task::run_first_task();
     // ----------------------------正常退出--------------------------
     panic!("main error...");
