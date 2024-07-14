@@ -60,3 +60,7 @@ pub fn yield_()->isize{
 pub fn get_time() -> isize {
     sys_get_time()
 }
+
+pub fn p_task_info() ->isize{
+    sys_task_info()
+}

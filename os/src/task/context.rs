@@ -18,6 +18,13 @@ impl TaskContext {
         }
     }
 
+    pub fn set_s(&mut self,id:usize,value:usize){
+        self.s[id] = value;
+    }
+    pub fn p_s(&self,id:usize)->usize{
+        self.s[id]
+    }
+
     pub fn goto_restore(kstask_ptr:usize)->Self{
         extern "C"{
             fn __restore();

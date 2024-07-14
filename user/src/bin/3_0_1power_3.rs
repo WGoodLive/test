@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use user_lib::{p_task_info, yield_};
+
 #[macro_use]
 extern crate user_lib;
 
@@ -18,10 +20,13 @@ fn main() -> i32 {
         let next = if cur + 1 == LEN { 0 } else { cur + 1 };
         s[next] = s[cur] * p % m;
         cur = next;
+        
         if i % 10000 == 0 {
+            yield_();
             println!("power_3 [{}/{}]", i, iter);
         }
     }
+    // p_task_info();
     println!("{}^{} = {}(MOD {})", p, iter, s[cur], m);
     println!("Test power_3 OK!");
     0

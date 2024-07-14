@@ -2,7 +2,7 @@ use riscv::register::time;
 const MSEC_PRE_SEC:usize = 1_000_000;
 use crate::config::CLOCK_FREQ; 
 //常数 CLOCK_FREQ 是一个预先获取到的各平台不同的时钟频率，单位为赫兹，也就是一秒钟之内计数器的增量
-const TICKS_PER_SEC: usize = 100;
+const TICKS_PER_SEC: usize = 1000;
 // RustSBI已经预留了相应的接口,
 // 接口被riscv封装
 /// 获取当前 mtime 计数器的值

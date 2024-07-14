@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use user_lib::p_task_info;
+
 #[macro_use]
 extern crate user_lib;
 
@@ -21,7 +23,9 @@ fn main() -> i32 {
         if i % 10000 == 0 {
             println!("power_5 [{}/{}]", i, iter);
         }
+        
     }
+    p_task_info();
     println!("{}^{} = {}(MOD {})", p, iter, s[cur], m);
     println!("Test power_5 OK!");
     0
