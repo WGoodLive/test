@@ -7,6 +7,19 @@ pub fn sys_exit(exit_code: i32) -> ! {
 }
 
 pub fn sys_yield() -> isize {
+    
+    let a = get_time_ms();
+    let mut t = get_time_ms();
+    while t<a+100000 { // 这个时间运行太久，会导致切换好几次应用，关键是处于内核级别，居然没法屏蔽内核的中断
+        t = get_time_ms();
+        if(t>a+5000 && t<a+5200){
+            println!("wait....");
+        }
+        let mut z = 0;
+        for i in 0..1000000{
+            
+        }
+    }
     suspend_current_and_run_next();
     0
 }

@@ -110,6 +110,7 @@ impl TaskManager {
     }
 
     fn run_next_task(&self){ 
+        println!("switch...");
         if let Some(next) = self.find_next_task(){
             // 如果find_next_task返回类型是Some，执行下面代码
             let mut inner = self.inner.exclusive_access();
@@ -124,7 +125,7 @@ impl TaskManager {
             unsafe {
                 TASKINFOARR.current_task_id = next;
                 TASKINFOARR.start(); // 开始计时
-                println!("id:{},start time:{}",next,TASKINFOARR.data[next].time);
+                // println!("id:{},start time:{}",next,TASKINFOARR.data[next].time);
             }
             
             drop(inner);
@@ -157,7 +158,7 @@ impl TaskManager {
         unsafe {
             TASKINFOARR.current_task_id = 0;
             TASKINFOARR.start(); // 开始计时
-            println!("id:{},start time:{}",0,TASKINFOARR.data[0].time);
+            // println!("id:{},start time:{}",0,TASKINFOARR.data[0].time);
         }
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner); // inner如果不drop,另个应用借不了

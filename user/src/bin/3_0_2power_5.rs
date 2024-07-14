@@ -25,7 +25,7 @@ fn main() -> i32 {
         }
         
     }
-    p_task_info();
+    // p_task_info();
     println!("{}^{} = {}(MOD {})", p, iter, s[cur], m);
     println!("Test power_5 OK!");
     0
