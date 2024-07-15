@@ -20,6 +20,7 @@ use crate::sbi::set_timer;
 
 /// 设置mtimecpp(m特权级寄存器)
 pub fn set_next_trigger() {
+    println!("time...set...");
     set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
 }
 

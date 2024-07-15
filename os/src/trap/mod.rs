@@ -3,8 +3,9 @@ pub mod context;
 use crate::timer::set_next_trigger;
 use core::{arch::global_asm, f32::INFINITY, task};
 use riscv::register::{
-    scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
+    mstatus::SPP, scause::{self,Exception,Trap}, sstatus, stval, stvec, utvec::TrapMode
 };
+
 use riscv::register::scause::Interrupt;
 pub use context::TrapContext;
 
@@ -17,13 +18,28 @@ pub fn init(){
     println!("trap start...");
     extern "C" {fn __alltraps();}
     unsafe{
+        
+    sstatus::set_sie()  // 打开内核态中断
+    // sstatus::clear_sie() // 关闭内核态中断
+    }
+    unsafe{
         stvec::write(__alltraps as usize, TrapMode::Direct);
     }
 }
 
 #[no_mangle]
+pub fn trap_handler(cx:&mut TrapContext)->&mut TrapContext{
+    match sstatus::read().spp() {
+        sstatus::SPP::Supervisor=>{
+            println!("kernel interrept...");
+            trap_kernel_handler(cx)
+        },
+        sstatus::SPP::User=>trap_user_handler(cx),
+    }
+}
+
 /// handle an interrupt, exception, or system call from user space
-pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
+pub fn trap_user_handler(cx:&mut TrapContext) -> &mut TrapContext{
     let scause = scause::read(); // 中断原因
     let stval = stval::read();  // trap附加信息
     match scause.cause(){
@@ -53,6 +69,40 @@ pub fn trap_handler(cx:&mut TrapContext) -> &mut TrapContext{
                 scause.cause(),
                 stval
             ); // 任何代码一旦panic,不可恢复
+        }
+    }
+    cx
+}
+
+static mut KERNEL_INTERRUPT_TRIGGERED: bool = false;
+
+/// 检查内核中断是否触发
+pub fn check_kernel_interrupt() -> bool {
+    unsafe { (&mut KERNEL_INTERRUPT_TRIGGERED as *mut bool).read_volatile() }
+}
+
+/// 标记内核中断已触发
+pub fn trigger_kernel_interrupt() {
+    unsafe {
+        (&mut KERNEL_INTERRUPT_TRIGGERED as *mut bool).write_volatile(true);
+    }
+}
+pub fn trap_kernel_handler(cx:&mut TrapContext) ->&mut TrapContext{
+    let scause = scause::read();
+    let stval = stval::read();
+
+    match scause.cause() {
+        Trap::Interrupt(Interrupt::SupervisorTimer)=>{
+            println!("supervisorTimer is coming...");
+            trigger_kernel_interrupt(); // 标记内核中断可以抢占，调试代码，可以删除
+            set_next_trigger(); // 说明时间片到了，才会触发这个
+        }
+        Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
+            panic!("[kernel] PageFault in kernel, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
+        }
+        _ => {
+            // 其他的内核异常/中断
+            panic!("unknown kernel exception or interrupt");
         }
     }
     cx

@@ -24,15 +24,21 @@
 
 # -------------------用户栈-> 内核栈的保存------------------
 __alltraps: # symbol：符号
+    csrr tp,sstatus
+    andi tp,tp,0x100
+    beqz tp, __user_trap_start
+    j __real_trap_entry
+__user_trap_start:
     # 这里储存的方式也跟TrapContext结构体的字段对应！
     # 原子指令 
     # csrrw reg1,CSR,reg2
     # 1. 将CSR状态寄存器 里面的值放在reg1寄存器
     # 2. 再将reg2寄存器里面的值写入CSR状态寄存器
-    # sscratch: 向异常处理程序提供一个字的临时存储
+    # sscratch: 向异常处理程序提供一个字的临时存储  
     csrrw sp, sscratch, sp 
+    # 参考Linux代码，可以知道，如果在内核中，sscratch为0，我们这里保存的内核栈sp
     # => 将sp指针与sscratch值互换
-
+__real_trap_entry:
     addi sp, sp, -34*8
     # => 栈负增长，将sp先下移34个寄存器
 
@@ -98,7 +104,10 @@ __restore:
     csrw sscratch, t2
 
 
+    andi t0, t0, 0x100
+    bnez t0, __kernel_trap_end
 
+__user_trap_end:
     # 返回地址ra 写入x1寄存器中
     ld x1, 1*8(sp)
     # gp全局指针 写入x3寄存器中
@@ -119,3 +128,19 @@ __restore:
 //  为啥还要csrrw sp, sscratch, sp
 //  因为sp可能是内核栈，sscratch是用户栈
 //  sret:本身并不保证一定会返回到用户态，根据sstatus的SPP状态决定
+
+__kernel_trap_end:
+    # sp/tp不保存
+    # 在陷入 __alltrap 时利用了 tp 寄存器来检查 sstatus的SPP 信息，
+    # 这样原本tp寄存器的信息就丢失了。但后续也有很多方法可以避免这个问题：
+    # 我看Linux系统里面把这个信息给先保存在内存中
+    ld x1, 1*8(sp)
+    ld x3, 3*8(sp)
+    .set n, 5
+    .rept 27
+        LOAD_GP %n
+        .set n, n+1
+    .endr
+    # release TrapContext on kernel stack
+    addi sp, sp, 34*8
+    sret

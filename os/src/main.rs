@@ -107,6 +107,9 @@ pub fn rust_main() -> !{
     pre_section();
     init_Log();
     println!("main start...");
+    println!("kernel interrept has completed.But 'andi tp,tp,0x100' in trap.S may be error,causing this trap all use trap_user_handler");
+
+    panic!("if want to run corrently,please delete this line...");
     trap::init();
     loader::load_apps();
     timer::init_timer();
