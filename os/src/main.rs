@@ -22,15 +22,18 @@
 // 由于我c们禁用了标准库，编译器也就找不到这项功能的实现了。 
 // 通过禁止main函数，就没有了所谓的初始化操作
 #![feature(panic_info_message)]
+#![feature(alloc_error_handler)]
 
 // 定义了一个模块board，并且指定了该模块的路径为boards/qemu.rs
 #[path = "boards/qemu.rs"]
 mod board;
-
+extern crate alloc;
+mod mm;
 use core::arch::{global_asm,asm};
 use loader::load_apps;
 use log::{debug, error, info, trace, warn};
 use logging::init_Log;
+use mm::frame_allocator::{frame_allocator_test, init_frame_allocator};
 // 使用宏
 #[macro_use]
 mod console;
@@ -45,6 +48,9 @@ pub mod config;
 pub mod task;
 // pub mod batch; // 应用加载 + 执行切换
 pub mod loader; // 应用加载
+
+#[macro_use]
+extern crate bitflags;
 
 global_asm!(include_str!("entry.asm"));
 // 把entry.asm变成字符串通过global_asm嵌入到代码中
@@ -108,6 +114,14 @@ pub fn rust_main() -> !{
     init_Log();
     println!("main start...");
     trap::init();
+    mm::heap_allocator::init_heap();
+    mm::heap_allocator::heap_test();
+    println!("heap test is ending");
+    init_frame_allocator();
+    {
+        frame_allocator_test();
+        panic!("end...");
+    }
     loader::load_apps();
     timer::init_timer();
     task::run_first_task();

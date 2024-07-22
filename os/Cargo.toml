@@ -8,10 +8,12 @@ edition = "2021"
 
 [dependencies]
 log = "0.4"
+buddy_system_allocator = "0.6" # 动态内存分配器的实现
 sbi-rt = {version="0.0.2",features = ["legacy"]}
 # legacy：说明是遗留窗口
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 riscv = {path = "../riscv",features = ["inline-asm"]}
+bitflags = "1.2.1"
 [profile.release]
 debug = true
 

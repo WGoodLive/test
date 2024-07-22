@@ -11,6 +11,7 @@ pub fn get_time()->usize{
 }
 
 
+
 ///  以毫秒为单位返回当前计数器的值
 pub fn get_time_ms() -> usize{
     get_time() / (CLOCK_FREQ / MSEC_PRE_SEC)
