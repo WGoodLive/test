@@ -327,6 +327,10 @@ RISC-V指令集架构设计中，基本的整数指令集（RV32I）和其64位�
 **但是，结果不尽人意：**S态居然会延迟这种中断的执行，仿佛中断在队列中等待(我最初以为是屏蔽中断失效)
 
 #### 优化
+
+浮点优化我还是没写：
+- 必须先把sstatus的fs字段设置为10 或 11 才能保存浮点寄存器 o^o
+
 我这个`git checkout ch3_homework`里面的实现繁琐了一些，主要是为了多验证我的理解，比如：
 - 我把任务id存到taskcontext的s数组里了(其实可以轻易获取的)
 - 我实现的自建的static，没有使用在Taskmanager里面创建变量
@@ -337,6 +341,47 @@ RISC-V指令集架构设计中，基本的整数指令集（RV32I）和其64位�
 - 一个模块的不同`.rs`可以拿到私有字段？
 - **本次代码，没用数组syscall_times指针传到taskcontext的数组里**，很遗憾
 
+### 时钟设定
 
 
+这个内容在下面的讨论看到的:
 
+
+> 提问： 我们是如何确定 在QEMU环境下 CLOCK_FREQ的值？我简单搜索了一圈也没有找到源
+
+1. 
+@hongjil 在 qemu 提供的设备树里有，可以看我存出来的，也可以用：
+qemu-system-riscv64 -machine virt,dumpdtb=dump.dtb
+得到 dump.dtb 文件，然后：
+dtc -o dump.dts dump.dtb
+得到你的环境里的 dts 文件，进去查一下，不同版本不一定一样
+
+2. 
+虽然但是，看上去似乎数值上有些偏差 timebase-frequency = <0x989680> => 10000000 != 12500000
+另外，这个似乎是cpu主屏，而我们找的CLOCK_FREQ 更像是对应clock-frequency？是我太naive了吗 QAQ
+
+3. 
+@hongjil 不是，其实是教程有问题，老版本 qemu 是 12.5 MHz，新的改了。CLOCK_FREQ 就是 CPU 主频。不过说是 CPU 主频，但实际就是 time 寄存器自增的频率而已，这个必须是一个稳定的值，真正 CPU 运行的频率不一定。
+
+#### 实现内核抢占中断
+
+- 在函数中不使用 clear_sie / set_sie 来开关中断，这是因为虽然我们在main.rs的测试中打开了中断，但 RISC-V 会自动在中断触发时关闭 sstatus.SIE，在 sret返回时打开 sstatus.SIE。在内核中需要小心打开中断的时机。例如触发中断时，内核正在拿着一些 mutex 锁，那么它在 trap_handler 中处理时一旦尝试拿锁，就可能自己跟自己造成死锁。
+1. 
+在 rCore-Tutorial本章节中，内核栈和用户栈都直接写在loader.rs 中。但在实际的内核中，用户空间往往在低地址（0x00000......），而内核空间在高地址（0xfffff......）。
+
+可以利用这一点，把 sp 看作有符号整数，如果它是负数则是内核栈地址，代表内核态发的中断；如果它是正数则是用户栈地址，代表用户态发的中断。即：
+这样就可以规避目前代码中丢失 tp 寄存器的问题。
+
+2. 
+另一种方法是扩展 sscratch 的定义。目前 sscratch 只用于用户栈和内核栈的交换，可以使它表示一个专门的页或者中间栈或者处理函数，在其中完成寄存器的保存，再安全地用寄存器检查中断来源。
+
+### 编程4,统计switch开销
+代码解释：
+```rust
+unsafe fn __switch(current_task_cx_ptr: *mut TaskContext, next_task_cx_ptr: *const TaskContext) {
+    SWITCH_TIME_START = get_time_us();
+    switch::__switch(current_task_cx_ptr, next_task_cx_ptr);
+    SWITCH_TIME_COUNT += get_time_us() - SWITCH_TIME_START;
+}
+```
+1. 首先你要明白，A，B互相切换之后，A，B的ra此时都指向
