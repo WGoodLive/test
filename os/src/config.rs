@@ -10,10 +10,10 @@ pub const KERNEL_HEAP_SIZE: usize = 0x30_0000;
 pub const PAGE_SIZE: usize = 0x1000;
 pub const PAGE_SIZE_BITS: usize = 0xc;
 
-
+pub const VA_WIDTH_SV39: usize = 39;
 pub const PA_WIDTH_SV39: usize = 56; // 因为SV39转换的物理地址是56位
 pub const PPN_WIDTH_SV39: usize = PA_WIDTH_SV39 - PAGE_SIZE_BITS; // 得到的就是PPN
-
+pub const VPN_WIDTH_SV39: usize = VA_WIDTH_SV39 - PAGE_SIZE_BITS;
 // 物理内存:[0x80000000,0x80800000)
 // ekernel指名内核的终止物理地址
 pub const MEMORY_END:usize = 0x80800000;
