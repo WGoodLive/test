@@ -2,7 +2,7 @@
 
 use crate::println;
 
-use super::VA_WIDTH_SV39;
+use super::{VA_WIDTH_SV39, VPN_WIDTH_SV39};
 use super::{page_table::PageTableEntry, PAGE_SIZE, PAGE_SIZE_BITS, PA_WIDTH_SV39, PPN_WIDTH_SV39};
 use alloc::fmt::Debug;
 use alloc::fmt::Formatter;
@@ -42,8 +42,6 @@ impl From<usize> for PhysAddr { // usize -> PhysAddr
 
 impl From<usize> for PhysPageNum { 
     fn from(value: usize) -> Self {
-        println!("...");
-        println!("{:#x}",value & ( (1 << PPN_WIDTH_SV39) - 1 ));
         Self(value & ( (1 << PPN_WIDTH_SV39) - 1 )) 
     }
 }
@@ -69,9 +67,19 @@ impl PhysAddr {
         PhysPageNum(self.0 / PAGE_SIZE)  // 不知道这里为啥不能右移
     }
 
-    /// PhysAddr -> PhysPageNum
-    pub fn ceil(&self) -> PhysPageNum {  
-        PhysPageNum((self.0 + PAGE_SIZE - 1) / PAGE_SIZE) 
+
+
+
+    pub fn ceil(&self) -> PhysPageNum {
+        if self.0 == 0 {
+            PhysPageNum(0)
+        } else {
+            PhysPageNum((self.0 - 1 + PAGE_SIZE) / PAGE_SIZE)
+        }
+    }
+
+    pub fn aligned(&self) -> bool {
+        self.page_offset() == 0
     }
 }
 
@@ -187,6 +195,30 @@ impl Debug for PhysAddr {
 impl Debug for PhysPageNum {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!("PPN:{:#x}", self.0))
+    }
+}
+
+// impl From<usize> for VirtPageNum {
+//     fn from(v: usize) -> Self {
+//         Self(v & ((1 << VPN_WIDTH_SV39) - 1))
+//     }
+// }
+
+// impl From<VirtPageNum> for usize {
+//     fn from(v: VirtPageNum) -> Self {
+//         v.0
+//     }
+// }
+
+impl From<VirtAddr> for VirtPageNum {
+    fn from(v: VirtAddr) -> Self {
+        assert_eq!(v.page_offset(), 0);
+        v.floor()
+    }
+}
+impl From<VirtPageNum> for VirtAddr {
+    fn from(v: VirtPageNum) -> Self {
+        Self(v.0 << PAGE_SIZE_BITS)
     }
 }
 

@@ -29,11 +29,12 @@
 mod board;
 extern crate alloc;
 mod mm;
+
 use core::arch::{global_asm,asm};
 use loader::load_apps;
 use log::{debug, error, info, trace, warn};
 use logging::init_Log;
-use mm::frame_allocator::{frame_allocator_test, init_frame_allocator};
+use mm::{frame_allocator::{frame_allocator_test, init_frame_allocator}, memory_set::remap_test};
 // 使用宏
 #[macro_use]
 mod console;
@@ -107,27 +108,38 @@ extern "C" fn _start(){ // 必须是 _start
 //1.2 我们就在 rust_main 的开头完成这一工作，由于控制权已经被转交给 Rust 
 //2. 没有返回值的函数。rust没return的函数默认返回`()` ，不是!类型
 #[no_mangle] //防止编译器更改这里定义的名字
-pub fn rust_main() -> !{ 
-
-    clear_bss();    // 给栈初始化
-    pre_section();
-    init_Log();
-    println!("main start...");
-    trap::init();
-    mm::heap_allocator::init_heap();
+pub fn rust_main() -> ! {
+    clear_bss();
+    println!("[kernel] Hello, world!");
+    mm::init();
+    println!("[kernel] back to world!");
+    remap_test();
     mm::heap_allocator::heap_test();
-    println!("heap test is ending");
-    init_frame_allocator();
-    {
-        frame_allocator_test();
-        panic!("end...");
-    }
-    loader::load_apps();
-    timer::init_timer();
+    trap::init();
+    //trap::enable_interrupt();
+    trap::enable_timer_interrupt();
+    timer::set_next_trigger();
     task::run_first_task();
-    // ----------------------------正常退出--------------------------
-    panic!("main error...");
+    panic!("Unreachable in rust_main!");
 }
+// pub fn rust_main() -> !{ 
+
+//     clear_bss();    // 给栈初始化
+//     pre_section();
+//     init_Log();
+//     println!("main start...");
+//     trap::init();
+//     {
+//         mm::init();
+//         mm::memory_set_new::remap_test();
+//         panic!("end...");
+//     }
+//     loader::load_apps();
+//     timer::init_timer();
+//     task::run_first_task();
+//     // ----------------------------正常退出--------------------------
+//     panic!("main error...");
+// }
 
 
 

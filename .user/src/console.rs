@@ -1,0 +1,34 @@
+use super::write;
+use core::fmt::{self, Write};
+
+
+struct Stdout;
+
+const STDOUT:usize = 1;
+
+
+impl Write for Stdout {
+    // as_bytes返回vec<u8>的引用
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        write(STDOUT, s.as_bytes()); // 没循环，所以直接字符串进去了
+        Ok(())
+    }
+}
+
+pub fn print(args:fmt::Arguments){
+    Stdout.write_fmt(args).unwrap();
+}
+
+#[macro_export]
+macro_rules! print {
+    ($fmt: literal $(, $($arg: tt)+)?) => {
+        $crate::console::print(format_args!($fmt $(, $($arg)+)?));
+    }
+}
+#[macro_export]
+macro_rules! println {
+    ($fmt: literal $(, $($arg: tt)+)?) => {
+        $crate::console::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
+    }
+}
+

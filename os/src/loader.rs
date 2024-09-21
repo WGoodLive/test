@@ -101,7 +101,7 @@ pub fn get_app_data(app_id:usize) -> &'static [u8]{
     let  num_app_ptr = _num_app as usize as *const usize;
     let num_app = get_num_app();
     let app_start = unsafe {
-        core::slice::from_raw_parts(num_app_ptr.add(1),num_app+1);
+        core::slice::from_raw_parts(num_app_ptr.add(1),num_app+1)
     };
 
     assert!(app_id<num_app);
@@ -109,7 +109,7 @@ pub fn get_app_data(app_id:usize) -> &'static [u8]{
     unsafe {
         core::slice::from_raw_parts(
             app_start[app_id] as *const u8,
-            app_start[app_id + 1] - app_start[app_id]
+            app_start[app_id + 1] - app_start[app_id],
         )
         
     }
@@ -119,12 +119,12 @@ fn get_base_i(app_id:usize)->usize{
     APP_BASE_ADDRESS + app_id * APP_SIZE_LIMIT
 }
 
-pub fn init_app_cx(app_id:usize)->usize{
-    KERNEL_STACK[app_id].push_context(
-        TrapContext::app_init_context(
-            get_base_i(app_id),
-            USER_STACK[app_id].get_sp()
-        )
-    )
-}
+// pub fn init_app_cx(app_id:usize)->usize{
+//     KERNEL_STACK[app_id].push_context(
+//         TrapContext::app_init_context(
+//             get_base_i(app_id),
+//             USER_STACK[app_id].get_sp()
+//         )
+//     )
+// }
 

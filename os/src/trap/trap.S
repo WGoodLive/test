@@ -16,33 +16,28 @@
 .endm
 
 # ---------------------------方法体-----------------------
-
-    .section .text
+    .section .text.trampoline
     .globl __alltraps
     .globl __restore
-.align 2  # 后续代码按 2^2=4 字节对齐byte对齐，这是 RISC-V 特权级规范的要求,
+    .align 2  # 后续代码按 2^2=4 字节对齐byte对齐，这是 RISC-V 特权级规范的要求,
 
 # -------------------用户栈-> 内核栈的保存------------------
 __alltraps: # symbol：符号
     # 这里储存的方式也跟TrapContext结构体的字段对应！
     # 原子指令 
     # csrrw reg1,CSR,reg2
-    # 1. 将CSR状态寄存器 里面的值放在reg1寄存器
-    # 2. 再将reg2寄存器里面的值写入CSR状态寄存器
-    # sscratch: 向异常处理程序提供一个字的临时存储
     csrrw sp, sscratch, sp 
     # => 将sp指针与sscratch值互换
-
-    addi sp, sp, -34*8
-    # => 栈负增长，将sp先下移34个寄存器
-
+    # 换完之后，sp->trap_context,sscratch -> user_kernel
     sd x1, 1*8(sp)
     # x1(ra：返回地址)，一般放在栈最上面 
     # riscv64：一个寄存器8byte
     # => 将x1寄存器的值 写入 M[sp + 1*8byte] 
     sd x3, 3*8(sp)
     # x3在riscv里面是全局变量，静态变量的基地址
-    # x4是线程指针
+    
+    # x2好像是栈地址，之后保存
+    # x4是线程指针，目前用不到
     # 他俩都不类似其他语言的fp：fp是函数的堆栈基地址
 
 
@@ -56,7 +51,7 @@ __alltraps: # symbol：符号
     # csrr reg1,CSR
     # 将CSR状态寄存器 里面的值放在reg1寄存器 
     csrr t0, sstatus
-    # => 将sstatus trap特权级存到to临时寄存器
+    # => 将sstatus trap特权级存到t0临时寄存器
 
     csrr t1, sepc
     # sepc(对于同步异常，指向触发异常的指令； 对于中断，指向中断处理后应恢复执行的指令)
@@ -72,50 +67,42 @@ __alltraps: # symbol：符号
     sd t2, 2*8(sp)
     # => 类似其他语言的fp，栈帧，存放在2号位
 
-    mv a0, sp 
-    # => sp里面是现在的，trap之后的新栈顶值，放在a0作为(函数参数/返回值)
+    # 加载内核的stap到t0
+    ld t0,34*8(sp)
+    # 加载trap_handle进入t1寄存器
+    ld t1,36*8(sp)
+    # 加载内核的sp给sp
+    ld sp,35*8(sp)
 
-    call trap_handler
+    # t0 -> satp
+    # 进入内核地址空间了
+    csrw satp,t0
+    sfence.vma
+    jr t1   # jump to t1寄存器保存的函数位置
 
 # -------------------内核栈 -> 用户栈的恢复 ------------------
 
 __restore:
-    # mv sp,a0 # 内核栈的栈帧sp，存放的用户栈的信息
-    
-    # 恢复trap之前的状态
+    # a0:用户栈的Trap_context
+    # a1:用户栈的起始物理地址（token）
+    csrw satp,a1
+    # 进入了用户地址空间
+    sfence.vma
+    csrw sscratch,a0
+    mv sp,a0
 
-    # 返回的sstatue写入t0
     ld t0, 32*8(sp)
-    # 把t0值写入sstatues寄存器中 
-    csrw sstatus, t0
-    
-    # 把sepc(返回的IP)写入t1
     ld t1, 33*8(sp)
+    csrw sstatus, t0
     csrw sepc, t1
-
-    # 返回的可能是用户栈fp(栈帧)写入t2
-    ld t2, 2*8(sp)
-    csrw sscratch, t2
-
-
-
-    # 返回地址ra 写入x1寄存器中
     ld x1, 1*8(sp)
-    # gp全局指针 写入x3寄存器中
     ld x3, 3*8(sp)
     .set n, 5
     .rept 27
         LOAD_GP %n
         .set n, n+1
     .endr
-    
-    # 内核释放内核栈
-    addi sp, sp, 34*8
-    # sp <-互换-> sscratch，效果sp:用户栈，sscratch：内核栈(临时寄存器，会被清)
-    csrrw sp, sscratch, sp
-    sret
 
-//  addi sp, sp, 34*8返回之后不就是上个函数的栈帧？
-//  为啥还要csrrw sp, sscratch, sp
-//  因为sp可能是内核栈，sscratch是用户栈
-//  sret:本身并不保证一定会返回到用户态，根据sstatus的SPP状态决定
+    # 返回用户栈
+    ld sp, 2*8(sp)
+    sret

@@ -469,58 +469,568 @@ pub fn frame_alloc() -> Option<FrameTracker>{
 
 页表 `PageTable` 只能以页为单位帮助我们维护一个虚拟内存到物理内存的地址转换关系，它本身对于计算机系统的整个虚拟/物理内存空间并没有一个全局的描述和掌控。
 
-```
-// os/src/mm/memory_set.rs
+#### 基于地址空间的分时多任务
 
-impl MemorySet {
-    /// Include sections in elf and trampoline and TrapContext and user stack,
-    /// also returns user_sp and entry point.
-    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
-        let mut memory_set = Self::new_bare();
-        // map trampoline
-        memory_set.map_trampoline();
-        // map program headers of elf, with U flag
-        let elf = xmas_elf::ElfFile::new(elf_data).unwrap();
-        let elf_header = elf.header;
-        let magic = elf_header.pt1.magic;
-        assert_eq!(magic, [0x7f, 0x45, 0x4c, 0x46], "invalid elf!");
-        let ph_count = elf_header.pt2.ph_count();
-        let mut max_end_vpn = VirtPageNum(0);
-        for i in 0..ph_count {
-            let ph = elf.program_header(i).unwrap();
-            if ph.get_type().unwrap() == xmas_elf::program::Type::Load {
-                let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
-                let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
-                let mut map_perm = MapPermission::U;
-                let ph_flags = ph.flags();
-                if ph_flags.is_read() { map_perm |= MapPermission::R; }
-                if ph_flags.is_write() { map_perm |= MapPermission::W; }
-                if ph_flags.is_execute() { map_perm |= MapPermission::X; }
-                let map_area = MapArea::new(
-                    start_va,
-                    end_va,
-                    MapType::Framed,
-                    map_perm,
-                );
-                max_end_vpn = map_area.vpn_range.get_end();
-                memory_set.push(
-                    map_area,
-                    Some(&elf.input[ph.offset() as usize..(ph.offset() + ph.file_size()) as usize])
-                );
-            }
+##### `头甲龙`操作系统
+
+- 创建内核页表，使能分页机制，建立内核的虚拟地址空间；
+- 扩展Trap上下文，在保存与恢复Trap上下文的过程中切换页表（即切换虚拟地址空间）；
+- 建立用于内核地址空间与应用地址空间相互切换所需的跳板空间；
+- 扩展任务控制块包括虚拟内存相关信息，并在加载执行创建基于某应用的任务时，建立应用的虚拟地址空间；
+- 改进Trap处理过程和sys_write等系统调用的实现以支持分离的应用地址空间和内核地址空间。
+
+上面的任务看起来好难。
+
+###### 跳板
+
+上一小节我们看到无论是内核还是应用的地址空间，最高的虚拟页面都是一个跳板。同时应用地址空间的次高虚拟页面还被设置为用来存放应用的 Trap 上下文。那么跳板究竟起什么作用呢？为何不直接把 Trap 上下文仍放到应用的内核栈中呢？
+
+**跳板的意义是啥**？
+
+在之前，切换应用应用，只需要来回切换一下`sscratch`,但是现在不一样了。
+
+- `__alltraps` 保存 Trap 上下文的时候，我们必须通过修改 satp 从应用地址空间切换到内核地址空间，因为 trap handler 只有在内核地址空间中才能访问。
+
+- 在 `__restore` 恢复 Trap 上下文的时候，我们也必须从内核地址空间切换回应用地址空间，因为应用的代码和数据只能在它自己的地址空间中才能访问
+
+**但是**，应用与内核在切换空间的时候，又必须保证指令的平滑进行。
+
+
+
+> [!note]
+>
+> 两种方案：
+>
+> 用户地址空间与内核地址空间分开  此时trap一次就要切换内核地址空间，但是切换任务不需要(switch在内核状态切换的)
+>
+> 用户也预留内核的虚拟空间，两者不隔离：此时trap不用切换地址空间，但是此时在用户空间的时候，就会有指令可以获得特权级，访问特权级内存，进而出现 **熔断漏洞**，通过乱序发射导致的产生上述问题。此时trap不用切换地址空间，但是任务切换需要切换地址空间（不同应用，不同地址空间）。同时由于内核的地址空间每个应用都要页表映射，所以多了许多不可避免的内存占用。
+>
+> Linux直接映射，第二种；win也好像是第二种，不过是内核映射不是直接映射，好像
+
+
+
+> [!tip]
+>
+> 目前可以解决：我们为何将应用的 Trap 上下文放到应用地址空间的次高页面而不是内核地址空间中的内核栈中呢？
+>
+> <del>因为应用无法访问内核的页面，只能访问自己的虚拟页面，所以自己的虚拟页面需要放自己的Trap上下文。</del>
+>
+> 必须先切换到内核地址空间，这就需要将内核地址空间的 token 写入 satp  寄存器；2）之后还需要保存应用的内核栈栈顶的位置，这样才能以它为基址保存 Trap  上下文。这两步需要用寄存器作为临时周转，然而我们无法在不破坏任何一个通用寄存器的情况下做到这一点。因为事实上我们需要用到内核的两条信息：内核地址空间的 token ，以及应用的内核栈栈顶的位置，RISC-V却只提供一个 `sscratch` 寄存器可用来进行周转。所以，我们不得不将 Trap 上下文保存在应用地址空间的一个虚拟页面中，而不是切换到内核地址空间去保存。
+
+![image-20240816102004745](./assets/image-20240816102004745.png)
+
+![image-20240816102022159](./assets/image-20240816102022159.png)
+
+跳板的作用：
+
+1. 这里需要注意：无论是内核还是应用的地址空间，跳板的虚拟页均位于同样位置，且它们也将会映射到同一个实际存放这段汇编代码的物理页帧。
+2. 这样，这段汇编代码放在一个物理页帧中，且 `__alltraps` 恰好位于这个物理页帧的开头，其物理地址被外部符号 `strampoline` 标记。在开启分页模式之后，内核和应用代码都只能看到各自的虚拟地址空间，而在它们的视角中，这段汇编代码都被放在它们各自地址空间的最高虚拟页面上，由于这段汇编代码在执行的时候涉及到地址空间切换，故而被称为跳板页面。
+
+> [!note]
+>
+> 最后可以解释为何我们在 `__alltraps` 中需要借助寄存器 `jr` 而不能直接 `call trap_handler` 了。因为在内存布局中，这条 `.text.trampoline` 段中的跳转指令和 `trap_handler` 都在代码段之内，汇编器（Assembler）和链接器（Linker）会根据 `linker-qemu/k210.ld` 的地址布局描述，设定跳转指令的地址，并计算二者地址偏移量，让跳转指令的实际效果为当前 pc  自增这个偏移量。但实际上由于我们设计的缘故，这条跳转指令在被执行的时候，它的虚拟地址被操作系统内核设置在地址空间中的最高页面之内，所以加上这个偏移量并不能正确的得到 `trap_handler` 的入口地址。
+>
+> **问题的本质可以概括为：跳转指令实际被执行时的虚拟地址和在编译器/汇编器/链接器进行后端代码生成和链接形成最终机器码时设置此指令的地址是不同的。**
+
+#### 問題
+
+> [!note]
+>
+> 这里对裸指针解引用成立的原因在于：当前已经进入了内核地址空间，而要操作的内核栈也是在内核地址空间中的?????????????????????????
+
+```rust
+// 
+*trap_cx = TrapContext::app_init_context(
+    entry_point,
+    user_sp,
+    KERNEL_SPACE.exclusive_access().token(),
+    kernel_stack_top,
+    trap_handler as usize,
+);
+```
+
+
+
+```rust
+// os/src/mm/page_table.rs
+
+pub fn translated_byte_buffer(
+    token: usize,
+    ptr: *const u8,
+    len: usize
+) -> Vec<&'static [u8]> {
+    let page_table = PageTable::from_token(token);
+    let mut start = ptr as usize;
+    let end = start + len;
+    let mut v = Vec::new();
+    while start < end {
+        let start_va = VirtAddr::from(start);
+        let mut vpn = start_va.floor();
+        let ppn = page_table
+            .translate(vpn)
+            .unwrap()
+            .ppn();
+        vpn.step();
+        let mut end_va: VirtAddr = vpn.into();
+        end_va = end_va.min(VirtAddr::from(end));
+        if end_va.page_offset() == 0 {
+            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..]);
+        } else {
+            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..end_va.page_offset()]);
         }
-        // map user stack with U flags
-        let max_end_va: VirtAddr = max_end_vpn.into();
-        let mut user_stack_bottom: usize = max_end_va.into();
-        // guard page
-        user_stack_bottom += PAGE_SIZE;
-        let user_stack_top = user_stack_bottom + USER_STACK_SIZE;
-        memory_set.push(MapArea::new(
-            user_stack_bottom.into(),
-            user_stack_top.into(),
-            MapType::Framed,
-            MapPermission::R | MapPermission::W | MapPermission::U,
-        ), None);
+        start = end_va.into();
+    }
+    v
+}
+```
+
+
+
+### 第四章整体脉络
+
+#### 虚拟地址与物理地址
+
+<img src="./assets/image-20240916113411148.png" alt="image-20240916113411148" style="zoom:67%;" />
+
+- 定义虚拟地址与物理地址
+- 相应的转换关系`usize <-> P/V Addr -> P/V PageAddr`
+
+#### 页表项
+
+<img src="./assets/image-20240916113918335.png" alt="image-20240916113918335" style="zoom:50%;" />
+
+![image-20240916114029522](./assets/image-20240916114029522.png)
+
+保存物理页的访问属性+物理页帧号
+
+#### 页表
+
+<img src="./assets/image-20240916114838254.png" alt="image-20240916114838254" style="zoom: 67%;" />
+
+储存页表项的数组，为了按需分配，采用字典树机制
+
+这个东西就是拿出一个具体的物理页帧，储存每个被分配的物理页帧(每个应用都有一个自己的页表)
+
+作用1：
+
+- 储存的分配的物理页帧的生命周期，仿佛他把具体的物理页帧拿下了
+- 储存的只是物理页帧的**引用**
+
+`find_pte_create`
+
+- 作用：按照字典树寻找虚拟地址的相应的物理页帧,看下图其实我们是可以看出来的，虚拟页号并没有直接的储存起来，而是通过数组的方式
+
+- 会不断找页表项，然后建立字典树，如果发现目录未创建，会分配个物理页帧，然后给物理页帧页表项，分配属性，之后这个物理页帧放在页表中。最后找到叶结点的页表项的可变引用，注意，这里返回页表项方便查看属性
+
+<img src="./assets/image-20240718120407498.png" alt="image-20240718120407498" style="zoom:67%;" />
+
+<img src="./assets/image-20240916115155923.png" alt="image-20240916115155923" style="zoom:67%;" />
+
+| 合法V | 可写W | 可读R | 可执行X | 用途                   |
+| ----- | ----- | ----- | ------- | ---------------------- |
+| 0     | -     | -     | -       | 不合法页表项           |
+| 1     | 0     | 0     | 0       | 页目录项，后面还有叶子 |
+| 1     | 1/0   | 1/0   | 1/0     | WRX不同时为0,叶子结点  |
+
+
+
+> root 就是 satp位置
+
+#### 物理页帧分配器
+
+##### 物理页帧分配接口
+
+<img src="./assets/image-20240916120156088.png" alt="image-20240916120156088" style="zoom:67%;" />
+
+
+
+定义一个==合格==的`物理页帧管理者`需要拥有的能力
+
+##### 物理页帧管理者
+
+<img src="./assets/image-20240916120535758.png" alt="image-20240916120535758" style="zoom:67%;" />
+
+定义一个具体的==职位==，管理分配出去的物理页帧
+$$
+all=[s0,e0]\\
+all = recycle + [start,end]
+$$
+然后全球报道了一个人，做这个职位负责人:`FRAME_ALLOCATOR`
+
+##### 提供给外界的接口
+
+![image-20240916122255360](./assets/image-20240916122255360.png)
+
+封装一下，给外界一个接口去访问
+
+##### 物理页帧拥有者
+
+<img src="./assets/image-20240916122118226.png" alt="image-20240916122118226" style="zoom:80%;" />
+
+在这里提一下，为啥要有个`FrameTracker`,因为`物理页帧管理者`分配出去的只是一个`ppn`,我们无法通过一个没有属性的`ppn`去得到他是否`被分配`，然后通过绑定`ppn`到变量`FrameTracker`上，就可知道了，所以，我们在操作`FrameTracker`的时候，本质就是操作`ppn`。比如分配田地，我们无法肉眼知道是否被分配，只能通过分一个人站在被分配的田地上面，就可以知道了。然后通知这个人处理田地，就是处理这人所在的田地。所以，这里我称`FrameTracker`拥有`ppn`的所有权！！！
+
+#### 实际访问物理内存修改
+
+![image-20240917003550838](./assets/image-20240917003550838.png)
+
+`get_pte_array`:通过物理数调用这个方法，会得到这个物理页帧存的所有页表项
+
+`get_pte_array`:返回这片物理内存的地址，对他进行操作
+
+`get_mut`是个泛型函数，可以获取一个恰好放在一个物理页帧开头的类型为 `T` 的数据的可变引用。
+
+#### 虚拟页面与物理页面的映射关系建立
+
+```rust
+impl PageTable {
+    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
+        let pte = self.find_pte_create(vpn).unwrap();
+        assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
+        *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+    }
+    pub fn unmap(&mut self, vpn: VirtPageNum) {
+        let pte = self.find_pte(vpn).unwrap();
+        assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
+        *pte = PageTableEntry::empty();
+    }
+}
+```
+
+find_pte_create搜索虚拟页对应的物理页帧，然后建立映射，然后输入的ppn你要保证，有被分配的物理页帧,然后由于这个页表项被引用了，此时就可以被你修改了
+
+unmap好像没有回收ppn，只是让这个分配的物理页不合法，但是如果分配的物理页面不回收，后面再分配不就麻烦了
+
+> [!warning]
+>
+> 不管是map还是unmap都是在函数体外操作物理页面，主要是不同的映射方式，物理页面的申请和释放不同，为了减少耦合性，就不能再函数体里面申请或者释放物理页面
+>
+> 注意，pageTable只储存的页表项的生命周期，具体的数据页的页框的生命周期储存在MapArea里面，然后通过自动调用Drop自己释放！！！
+
+还提供了方法，创建临时页表的方法 + 拷贝虚拟页对应的`ppn+访问权限`
+
+#### 逻辑段
+
+![image-20240918211110394](./assets/image-20240918211110394.png)
+
+描述一段连续地址的虚拟内存（逻辑段连续）的相关信息
+
+- 虚拟地址范围`VPNRange`：[VPNRange讲解](#虚拟页号迭代版本：VPNRange )
+- 虚拟页号与物理页号的映射，同时保存着物理页号的生命周期（这里我感觉查找某虚拟页号的物理页面可以直接走这里，不需要三级查找了）
+- 映射方式
+- 访问属性
+
+在这里，恒等映射不用使用`frame_allocate`，我认为这个函数就是用来分配ppn的，但是恒等映射不需要管理的，因为他一直不被回收，放内核
+
+#### 地址空间
+
+地址空间 = 很多逻辑段组成
+
+![image-20240918213743082](./assets/image-20240918213743082.png)
+
+### 地址空间设计
+
+#### 内核
+
+> 在我看来，内核就是先声明一个memory_set,通过跳板，进入内核，然后按照读写权利，设置恒等映射和访问方式
+
+![../_images/kernel-as-high.png](./assets/kernel-as-high.png) ![../_images/kernel-as-low.png](./assets/kernel-as-low.png)
+
+#### 应用
+
+![https://rcore-os.cn/rCore-Tutorial-Book-v3/_images/app-as-full.png](./assets/app-as-full.png)
+
+先得到数据`get_app_data`然后调用`from_elf`进行页面处理
+
+因为按照SV39的格式写的，所以在satp处理之后，读取页表项的时候，通过对相应位置的访问属性的获取，就可以得到访问属性
+
+#### 拓展trap上下文
+
+因为Trap上下文并没有保存在内核，所以没有增加保存应用的相关信息
+
+- `kernel_satp` 表示内核地址空间的 token ，即**内核页表**的起始物理地址；
+- `kernel_sp` 表示当前应用在内核地址空间中的内核栈栈顶的虚拟地址；
+- `trap_handler` 表示内核中 trap handler 入口点的虚拟地址。
+
+它们在应用初始化的时候由内核写入应用地址空间中的 TrapContext 的相应位置，此后就不再被修改。
+
+> trap_context是在陷入之前，保护现场；user_kernel是函数调用用的；
+
+#### 拓展任务上下文
+
+![image-20240918230626760](./assets/image-20240918230626760.png)
+
+trap_cx_ppn：帮助在内核状态访问用户Trap上下文的真实物理页面返回Trap的可变引用，进行初始化
+
+1. 任务上下文在内核栈中，trap上下文在应用栈
+2. 任务控制块：储存整个进程的信息，任务上下文储存每次任务切换需要做的事情(寄存器返回地址)
+
+### 跳板
+
+接下来还需要考虑切换地址空间前后指令能否仍能连续执行。可以看到我们将 `trap.S` 中的整段汇编代码放置在 `.text.trampoline` 段，并在调整内存布局的时候将它对齐到代码段的一个页面中。
+
+![image-20240918224727419](./assets/image-20240918224727419.png)
+
+看上述代码，我们可以明确发现，satp换成用户空间之后，如果不能保证连续，后面的指令会运行错误。
+
+即刚产生trap时，CPU已经进入了内核态（即Supervisor  Mode），但此时执行代码和访问数据还是在应用程序所处的用户态虚拟地址空间中，而不是我们通常理解的内核虚拟地址空间。在这段特殊的时间内，CPU指令为什么能够被连续执行呢？这里需要注意：无论是内核还是应用的地址空间，跳板的虚拟页均位于同样位置，且它们也将会映射到同一个实际存放这段汇编代码的物理页帧。
+
+在处理跳板的时候，是直接map一个页面，因为1个页足够容纳跳板汇编代码
+
+由于跳板位于虚拟页面的最高页面，call通过偏移量并不能正确的得到trap_handler的入口地址！问题在于：**跳转指令实际被执行时的虚拟地址和在编译器/汇编器/链接器进行后端代码生成和链接形成最终机器码时设置此指令的地址是不同的。**
+
+我们此时的编写的都是内核代码，操作系统需要做的，所以全局变量储存在内核栈中
+
+#### 初始化任务
+
+内核首先开启自己的内核空间**->**弄完自己之后，弄用户 **-> **用户通过get_app_data然后使用from_elf对用户的虚拟地址进行相关设置,同时对`用户栈，跳板，上下文虚拟地址`进行了匹配**->** 初始化应用地址空间的Trap上下文 **->**  返回任务控制块 -> 把任务(进程)控制块加入内核中，由于任务控制块中保存着必要的memory_set里面储存的相应的页框变量，所以生命周期控制权不断上移！！！
+
+#### trap的变化
+
+trap在进入S态之后，更改此时陷入的位置，不允许再陷入，一旦再次trap就要panic了，在进入用户态的时候再次改回跳板，用户态至始至终陷入的位置都是跳板！
+
+
+
+#### 虚拟页号迭代版本：VPNRange
+
+<img src="./assets/image-20240918212207533.png" alt="image-20240918212207533" style="zoom:67%;" />
+
+- `StepByOne`:如何自增
+- `SimpleRange`:vpn范围
+- `IntoIterator`:把VPN范围换成迭代器
+- `SimpleRangeIterator`:每次next取的元素是啥
+
+#### elf使用
+
+[elf详解](https://blog.csdn.net/weixin_38669561/article/details/105219896)
+
+## 疑惑
+
+我感觉目前这种情况不容易内核给用户信息，因为内核一般给的都是内存引用，用户需要根据这个引用去访问，却因为权限问题不被允许，可以尝试:**不同进程之间进行信息交流！！**
+
+
+
+## 课后题
+
+### sbrk
+
+![https://rcore-os.cn/rCore-Tutorial-Book-v3/_images/app-as-full.png](./assets/app-as-full.png)
+
+我们计划是上图这样的,但是实际上这里少了堆的空间位置，一般可以是：
+
+```mermaid
+gantt
+section 内存
+栈 :active, des1,2024-01-01,1h
+堆 :active, des2,2024-01-01,1h
+保护页面 :done, des2,2024-01-01,1h
+.bss :active, des2,2024-01-01,1h
+.data :active, des2,2024-01-01,1h
+.rodata :active, des2,2024-01-01,1h
+.text :active, des2,2024-01-01,1h
+待定 : des2,2024-01-01,1h
+```
+
+> [!warning]
+>
+> 栈的数据存放顺序：高地址 -> 低地址
+>
+> 堆的数据存放顺序：低地址 -> 高地址
+>
+> 所以栈堆的数据存放起点相同
+>
+> stack_bottom = heap_bottom
+
+---
+
+sbrk的作用就是：**在堆中申请与释放内存**
+
+现在我们开始书写代码。
+
+#### 系统调用
+
+```rust
+// os/syscall/mod.rs
+const SYSCALL_SBRK:usize = 214;
+pub fn syscall(syscall_id:usize,args:[usize;3])->isize{
+    // 用户级的系统输出
+    match syscall_id {
+		...
+        SYSCALL_SBRK => sys_sbrk(args[0] as i32),
+        ...
+    }
+}
+
+
+// os/syscall/process.rs
+pub fn sys_sbrk(size:i32) -> isize{
+    if let Some(old_brk) = change_program_sbrk(size){
+        old_brk as isize
+    }
+    else{
+        -1
+    }
+}
+```
+
+```rust
+// user/lib.rs
+pub fn sbrk(size: i32) -> isize {
+    sys_sbrk(size)
+}
+
+// user/syscall.rs
+const SYSCALL_SBRK: usize = 214;
+pub fn sys_sbrk(size: i32) -> isize {
+    syscall(SYSCALL_SBRK, [size as usize, 0, 0])
+}
+```
+
+#### 任务管理器
+
+```rust
+// os/task/mod.rs
+
+// 因为要修改运行的进程的断点，所以需要提供一个外部接口
+pub fn change_program_sbrk(size:i32) -> Option<usize>{
+    TASK_MANAGER.change_current_program_brk(size)
+}
+
+impl task_manager{
+    ...
+    fn change_current_program_brk(&self,size:i32) -> Option<usize>{
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].change_program_brk(size)
+    }
+    ...
+}
+```
+
+#### 任务控制块
+
+```rust
+// os/task/task.rs
+
+pub struct TaskControlBlock{
+	...
+    // 一个储存堆的底部，一个存储项目此时的brk
+    pub heap_bottom:usize,
+    pub program_brk:usize
+}
+
+
+impl TaskControlBlock{
+    // 初始化工作
+    fn new(elf_data:&[u8],app_id:usize) -> Self{
+        ...
+        let task_control_block = Self{
+            task_status,
+            task_cx:TaskContext::goto_trap_return(kernel_stack_top),
+            memory_set,
+            trap_cx_ppn,
+            base_size:user_sp,
+            heap_bottom:user_sp,
+            program_brk:user_sp,
+        };
+        ...
+    }
+    
+    
+    fn change_program_brk(&mut self,size:i32) ->Option<usize>{
+        let old_brk = self.program_brk;
+        let new_brk = old_brk as isize + size as isize;
+
+        // 不能出堆的范围
+        if new_brk < self.heap_bottom as isize{
+            return None;
+        }
+
+        let result = if size<0{
+            self.memory_set
+                .shrink_to(VirtAddr(self.heap_bottom),VirtAddr(new_brk as usize))
+        }else {
+            self.memory_set
+                .append_to(VirtAddr(self.heap_bottom), VirtAddr(new_brk as usize))
+        };
+
+        if result{
+            self.program_brk = new_brk as usize;
+            Some(old_brk)
+        }else {
+            None
+        }
+    }
+}
+
+impl Memory_set{
+        pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool{
+        if let Some(area) = self.areas
+        .iter_mut()
+        .find(|area|area.vpn_range.get_start() == start.floor()){ // 检查是否有堆的逻辑段
+            area.shrink_to(&mut self.page_table, new_end.ceil());  // start = Heap_bottom
+            true
+        }else{
+            false
+        }
+    }
+    
+        pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
+        if let Some(area) = self.areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() == start.floor())
+        {
+            area.append_to(&mut self.page_table, new_end.ceil());
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl MapArea{
+    
+            // 这个是页面减少函数
+    pub fn shrink_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
+        for vpn in VPNRange::new(new_end, self.vpn_range.get_end()){ // heap_bottom  -> new_end -> get_end()
+            self.unmap_one(page_table, vpn);
+        }
+        self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
+    } 
+}
+
+    pub fn append_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
+        for vpn in VPNRange::new(self.vpn_range.get_end(), new_end) {
+            self.map_one(page_table, vpn)
+        }
+        self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
+    }
+}
+```
+
+
+
+#### 应用程序堆的声明
+
+这个东西我之前没发现，而且关联性低，难以发现问题。
+
+在堆的逻辑段查找过程总是失败，然后我就在看是不是堆创建的问题，最后发现问题：
+
+```rust
+// os/mm/memory_set.rs
+impl memory_set{
+    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
+        .........
+        // used in sbrk,这个作为堆的声明
+        memory_set.push(
+            MapArea::new(
+                user_stack_top.into(),
+                user_stack_top.into(),
+                MapType::Framed,
+                MapPermission::R | MapPermission::W | MapPermission::U,
+            ),
+            None,
+        );
+        ...........
         // map TrapContext
         memory_set.push(MapArea::new(
             TRAP_CONTEXT.into(),
@@ -530,5 +1040,11 @@ impl MemorySet {
         ), None);
         (memory_set, user_stack_top, elf.header.pt2.entry_point() as usize)
     }
+
 }
 ```
+
+
+
+就我目前的理解，这个sbrk代码的只能实现页面级别的控制，不能很细微的把握！！！
+

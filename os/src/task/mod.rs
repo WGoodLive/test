@@ -5,6 +5,8 @@ mod task;
 use crate::sbi::shutdown;
 use crate::sync::UPSafeCell;
 use crate::config::*;
+use crate::trap::TrapContext;
+use alloc::vec::Vec;
 use lazy_static::*;
 use log::warn;
 use switch::__switch;
@@ -17,7 +19,7 @@ pub struct TaskManager{
 }
 
 struct TaskManagerInner{
-    tasks: [TaskControlBlock; MAX_APP_NUM], // 每个任务的控制块
+    tasks: Vec<TaskControlBlock>,// [TaskControlBlock; MAX_APP_NUM], // 每个任务的控制块
     current_task: usize, // 当前任务id
 }
 
@@ -84,32 +86,49 @@ impl TaskManager {
         }
         panic!("unreachable in run_first_task");
     }
+
+    fn get_current_token(&self) -> usize {
+
+        let inner = self.inner.exclusive_access();
+
+        let current = inner.current_task;
+
+        inner.tasks[current].get_user_token()
+
+    }
+
+
+    fn get_current_trap_cx(&self) -> &mut TrapContext {
+
+        let inner = self.inner.exclusive_access();
+
+        let current = inner.current_task;
+
+        inner.tasks[current].get_trap_cx()
+
+    }
+
+    fn change_current_program_brk(&self,size:i32) -> Option<usize>{
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].change_program_brk(size)
+    }
 }
 
 
 
 lazy_static!{
     pub static ref TASK_MANAGER:TaskManager={
-        let num_app:usize = get_num_app();
-        let mut tasks = [
-            TaskControlBlock{
-                task_status:TaskStatus::UnInit,
-                task_cx:TaskContext::zero_init(),
-            };
-            MAX_APP_NUM
-        ];
-        
-        /* 
-        or (i, task) in tasks.iter_mut().enumerate() {
-            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
-            task.task_status = TaskStatus::Ready;
-        }
-        */
-        for i in 0..num_app{ // 软件先初始化
-            tasks[i] = TaskControlBlock{
-                task_status:TaskStatus::Ready,
-                task_cx:TaskContext::goto_restore(init_app_cx(i)),
-            };
+        println!("init TASK_MANAGER");
+        let num_app = get_num_app();
+        println!("num_app = {}", num_app);
+        let mut tasks:Vec<TaskControlBlock> = Vec::new();
+
+        for i in 0..num_app {
+            tasks.push(TaskControlBlock::new(
+                get_app_data(i),
+                i,
+            ));
         }
 
         TaskManager {
@@ -152,3 +171,20 @@ fn run_next_task() {
     TASK_MANAGER.run_next_task();
 }
 
+pub fn current_user_token() -> usize {
+
+    TASK_MANAGER.get_current_token()
+
+}
+
+
+pub fn current_trap_cx() -> &'static mut TrapContext {
+
+    TASK_MANAGER.get_current_trap_cx()
+
+}
+
+// 因为要修改运行的进程的断点，所以需要提供一个外部接口
+pub fn change_program_sbrk(size:i32) -> Option<usize>{
+    TASK_MANAGER.change_current_program_brk(size)
+}

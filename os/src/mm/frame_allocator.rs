@@ -8,13 +8,13 @@ use super::address::PhysPageNum;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use core::fmt::{self,  Formatter};
-/// 物理页帧管理器需要提供的功能
+/// 定义物理页帧管理器需要提供的功能
 trait FrameAllocator{
     fn new()->Self;
     fn alloc(&mut self) -> Option<PhysPageNum>;
     fn dealloc(&mut self,ppn:PhysPageNum);
 }
-/// 栈式页帧管理
+/// 栈式页帧管理，具体的管理分配的物理页帧  
 pub struct StackFrameAllocator{
     // 物理页号区间 [ current , end ) 此前均 从未 被分配出去过
     current:usize,
