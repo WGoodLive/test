@@ -3,8 +3,8 @@ use core::arch::asm;
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use riscv::{register::satp};
 use crate::{config::PAGE_SIZE, mm::{address::StepByOne, MEMORY_END, TRAMPOLINE, TRAP_CONTEXT, USER_STACK_SIZE}, println, sync::UPSafeCell};
-use super::{address::{PhysAddr, PhysPageNum, VPNRange, VirtAddr, VirtPageNum}, frame_allocator::{frame_alloc, FrameTracker},page_table::{PTEFlags, PageTable, PageTableEntry}};
-
+use super::{address::{PhysAddr, PhysPageNum, VPNRange, VirtAddr, VirtPageNum}, frame_allocator::{frame_alloc, FrameTracker},page_table::{add_count, PTEFlags, PageTable, PageTableEntry}};
+use crate::mm::page_table::PAGEREFCOUNT;
 
 #[derive(Copy,Clone,PartialEq,Debug)]
 /// 页面映射方式
@@ -92,6 +92,10 @@ impl MapArea {
         page_table.unmap(vpn);
     }
 
+
+
+
+
     pub fn copy_data(&mut self,page_table:&PageTable,data:&[u8]){
         assert_eq!(self.map_type,MapType::Framed);
         let mut start:usize = 0;
@@ -128,6 +132,15 @@ impl MapArea {
             self.map_one(page_table, vpn)
         }
         self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
+    }
+
+    pub fn resplace_one(&mut self, page_table: &mut PageTable,vpn: VirtAddr,id:usize){
+        let ppn = add_count(id, vpn); // 改页面属性
+        self.data_frames.insert(vpn.into(), FrameTracker{ppn}); // 分配共享页
+        // 由于data_frames记录着FrameTracker，所以之前的物理页会没有所有者被回收
+        let map_perm = self.map_perm.bits() & (!(MapPermission::W).bits());
+        let pte_flags = PTEFlags::from_bits(map_perm).unwrap();
+        page_table.map(vpn.into(), ppn, pte_flags);
     }
     
 }
@@ -358,6 +371,29 @@ impl MemorySet {
             false
         }
     }
+
+    pub fn append_share_page(&mut self, start: VirtAddr, end:VirtAddr,id:usize) -> bool {
+        if let Some(area) = self.areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() == start.floor())
+        {
+
+        } else {
+            false
+        }
+    }
+
+    pub fn shrink_share_page(&mut self, start: VirtAddr, end:VirtAddr,id:usize) -> bool {
+        if let Some(area) = self.areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() == start.floor())
+        {
+
+        } else {
+            false
+        }
+    }
+
 }
 
 

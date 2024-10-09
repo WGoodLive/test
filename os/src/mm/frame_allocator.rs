@@ -43,7 +43,10 @@ impl FrameAllocator for StackFrameAllocator {
         }
     }
 
+    /// 在实现cow机制的时候，这个没实现对共享引用的判断和处理
     fn dealloc(&mut self,ppn:PhysPageNum) {
+
+        
         let ppn = ppn.0;
         // 看看是否已经被分配(已回收/未分配的情况都是不能销毁的)
         if ppn>self.current || self.recycled.iter().find(|&v|*v == ppn).is_some(){

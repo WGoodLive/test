@@ -1,7 +1,9 @@
 use bitflags::*;
-use riscv::addr::PhysAddr;
+
 use alloc::vec::Vec;
 use alloc::vec;
+use lazy_static::lazy_static;
+use crate::{mm::{address::PhysAddr, MEMORY_END}, sync::UPSafeCell, task::{change_program_sbrk, current_user_token}};
 
 use super::{address::{PhysPageNum, StepByOne, VirtAddr, VirtPageNum}, frame_allocator::{self, frame_alloc, FrameTracker}, PA_WIDTH_SV39, PPN_WIDTH_SV39};
 
@@ -70,10 +72,91 @@ impl PageTableEntry {
 
 }
 
+lazy_static!{
+    pub static ref PAGEREFCOUNT:UPSafeCell<SharePage> = unsafe {
+        UPSafeCell::new(SharePage::new())
+    };
+}
+pub struct SharePage{
+    page_ref:Vec<PhysPageNum>,
+    ref_num:Vec<usize>,
+}
+
+impl SharePage {
+    pub fn new()->Self{
+        Self{
+            page_ref:Vec::new(),
+            ref_num:Vec::new(),
+        }
+    }
+
+    pub fn init(&mut self,length:usize){
+        self.page_ref = vec![(0 as usize).into();length];
+        self.ref_num = vec![0;length];
+    }
+
+    pub fn add_page(&mut self,id:usize,vpn:VirtAddr) ->PhysPageNum{
+        if(id<self.page_ref.len()){
+            if(self.page_ref[id].0==0){
+                let token = current_user_token();
+                let entry = PageTable::from_token(token);
+                entry.transform(false, vpn.into());
+                let u: Option<PageTableEntry> = entry.translate(vpn.into());
+                match u {
+                    Some(entry) => {
+                        self.ref_num[id] +=1;
+                        self.page_ref[id] = entry.ppn();
+                        self.page_ref[id]
+                    },
+                    None=>panic!("add_page is not exist...")
+                }
+            }else{
+                self.ref_num[id] +=1;
+                self.page_ref[id]
+            }
+        }else{
+            panic!("add_page's id must be less than length...")
+        }
+    }
+
+    pub fn remove_page(&mut self,id:usize) ->(usize,PhysPageNum){
+        if(id<self.page_ref.len()){
+            let num = self.ref_num[id];
+            let ppn = self.page_ref[id];
+            if(num==0){
+                panic!("remove_page err...")
+            }else if num==1 {
+                self.page_ref[id] = (0 as usize).into();
+                self.ref_num[id]=0;
+                (0,ppn)
+            }else{
+                self.ref_num[id]-=1;
+                (num-1,ppn)
+            }
+        }else{
+            panic!("add_page's id must be less than length...")
+        }
+    }
+}
+
+pub fn init_ref_count(){
+    PAGEREFCOUNT.exclusive_access().init(8);
+}
+
+pub fn add_count(id:usize,vpn:VirtAddr) -> PhysPageNum{
+    PAGEREFCOUNT.exclusive_access().add_page(id, vpn)
+}
+
+pub fn remove_share(ppn:PhysPageNum){
+    
+}
+
+
+
 /// 储存根节点，以及物理页号
 pub struct PageTable{
     root_ppn:PhysPageNum,
-    frames:Vec<FrameTracker>
+    frames:Vec<FrameTracker>,
 }
 // 一个节点所在物理页帧的物理页号其实就是指向该节点的“指针”。
 impl PageTable {
@@ -87,12 +170,14 @@ impl PageTable {
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags){
         let pte = self.find_pte_create(vpn).unwrap();
         assert!(!pte.is_valid(),"vpn {:?} is mapped before mapping", vpn);
+        // PAGEREFCOUNT.exclusive_access().page_ref_add(ppn);
         *pte = PageTableEntry::new(ppn, flags|PTEFlags::V);
     }
 
     pub fn unmap(&mut self, vpn: VirtPageNum){
         let pte = self.find_pte(vpn).unwrap();
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
+        // PAGEREFCOUNT.exclusive_access().page_ref_reduce(pte.ppn());
         *pte = PageTableEntry::empty();
     }
     
@@ -148,6 +233,18 @@ impl PageTable {
 
     pub fn token(&self) ->usize{
         8usize << 60 | self.root_ppn.0
+    }
+
+    
+    pub fn transform(&self,w:bool,vpn:VirtPageNum){
+        let entry_w = self.find_pte(vpn).unwrap();
+        let flags;
+        if(w){
+            flags = entry_w.flags() & PTEFlags::W;
+        }else {
+            flags = entry_w.flags() & !(PTEFlags::W);
+        }
+        *entry_w = PageTableEntry::new(entry_w.ppn(), flags);
     }
 }
 

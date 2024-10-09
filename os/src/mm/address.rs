@@ -133,7 +133,7 @@ impl VirtPageNum{
     /// 因为是恒等映射，所以就29位VPN=PPN
     pub fn indexes(&self) ->[usize;3]{
         let mut vpn = self.0;
-        let mut idx = [0usize; 3];
+        let mut idx: [usize; 3] = [0usize; 3];
         for i in (0..3).rev() {
             idx[i] = vpn & 511;
             vpn >>= 9;

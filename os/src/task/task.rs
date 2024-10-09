@@ -38,6 +38,11 @@ pub struct TaskControlBlock{
 
 
 impl TaskControlBlock {
+
+    /// 堆分配
+    
+
+
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()
     }
@@ -104,6 +109,34 @@ impl TaskControlBlock {
             self.program_brk = new_brk as usize;
             Some(old_brk)
         }else {
+            None
+        }
+    }
+
+    pub fn add_program_share_page(&mut self,id:usize,type_add:bool) ->Option<usize>{
+        let mut size = crate::config::PAGE_SIZE as isize;
+        if(!type_add){
+            size *=-1;
+        }
+        let old_brk = self.program_brk;
+        let new_brk = self.program_brk as isize + size as isize;
+        // 不能出堆的范围
+        if new_brk < self.heap_bottom as isize{
+            return None;
+        }
+
+        let result = if size<0{
+            self.memory_set
+                .shrink_share_page(VirtAddr(self.heap_bottom),VirtAddr(new_brk as usize),id)
+        }else {
+            self.memory_set
+                .append_share_page(VirtAddr(self.heap_bottom), VirtAddr(new_brk as usize),id)
+        };
+
+        if result{
+            self.program_brk = new_brk as usize;
+            Some(old_brk)
+        }else { 
             None
         }
     }

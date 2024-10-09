@@ -113,6 +113,14 @@ impl TaskManager {
         let current_id = inner.current_task;
         inner.tasks[current_id].change_program_brk(size)
     }
+
+    fn add_current_share_page(&self,id:usize,type_page:bool)->Option<usize>{
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].add_program_share_page(id,type_page)
+    }
+
+    
 }
 
 
@@ -187,4 +195,9 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 // 因为要修改运行的进程的断点，所以需要提供一个外部接口
 pub fn change_program_sbrk(size:i32) -> Option<usize>{
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// 系统调用的公共接口
+pub fn add_share_page(id:usize) -> Option<usize>{
+    TASK_MANAGER.add_current_program_share_page(id)
 }
