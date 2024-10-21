@@ -130,6 +130,17 @@ impl MapArea {
         self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
     }
     
+    pub fn from_another(another:&MapArea)->Self{
+        Self { 
+            vpn_range: VPNRange::new(
+                another.vpn_range.get_start(), 
+                another.vpn_range.get_end()
+            ), 
+            data_frames: BTreeMap::new(), 
+            map_type: another.map_type, 
+            map_perm: another.map_perm 
+        }
+    }
 }
 
 
@@ -143,6 +154,36 @@ impl MemorySet{
     pub fn new_bare() -> Self{
         Self{page_table:PageTable::new(),areas:Vec::new()}
     }
+
+    /// 清空数据页，地址页？？
+    /// 但用来存放页表的那些物理页帧此时还不会被回收（会由父进程最后回收子进程剩余的占用资源）。
+    pub fn recycle_data_pages(&mut self) {
+        self.areas.clear();
+    }
+
+    pub fn from_existed_user(user_space:&MemorySet) -> MemorySet{
+        let mut memory_set = Self::new_bare();
+
+        // 解析ELF创建地址空间的时候，并没有将跳板页作为一个单独的逻辑段插入到地址空间的逻辑段向量areas中
+        // 这个代码实现对跳板地址的映射
+        memory_set.map_trampoline();
+
+        // 上下文是逻辑段，被复制了
+        for area in user_space.areas.iter(){
+            let new_area= MapArea::from_another(area);
+            memory_set.push(new_area,None);
+            // 在当前应用空间加逻辑段，并实现分配物理页...
+            // 页表通过对数据物理页的申请，才分配页表，所以最初页表就没复制，就是空的，数据段都复制了
+            for vpn in area.vpn_range{
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn.get_bytes_array().copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
+
+        memory_set
+    }
+
     /// 在当前地址空间插入一个新的逻辑段 map_area ，  
     /// 如果它是以 Framed 方式映射到物理内存，还可以可选地在那些被映射到的物理页帧上写入一些初始化数据 data ；
     fn push(&mut self,mut map_area:MapArea,data:Option<&[u8]>){
@@ -163,6 +204,18 @@ impl MemorySet{
             MapType::Framed,
             permission,
         ), None);
+    }
+
+    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
+        if let Some((idx, area)) = self
+            .areas
+            .iter_mut()
+            .enumerate()
+            .find(|(_, area)| area.vpn_range.get_start() == start_vpn)
+        {
+            area.unmap(&mut self.page_table);  // 删除存页表用的物理页框
+            self.areas.remove(idx); // 删除实际用的页
+        }
     }
 
 }
@@ -230,6 +283,8 @@ impl MemorySet{
         ), None);
         memory_set
     }
+
+    
 } 
 
 // ===============创建应用地址空间=======================

@@ -114,12 +114,14 @@ pub fn rust_main() -> ! {
     mm::init();
     println!("[kernel] back to world!");
     remap_test();
-    mm::heap_allocator::heap_test();
+    // mm::heap_allocator::heap_test();
+    task::add_initproc();
     trap::init();
     //trap::enable_interrupt();
-    trap::enable_timer_interrupt();
-    timer::set_next_trigger();
-    task::run_first_task();
+    // trap::enable_timer_interrupt();
+    // timer::set_next_trigger();
+    loader::list_app();
+    task::processor::run_tasks();
     panic!("Unreachable in rust_main!");
 }
 // pub fn rust_main() -> !{ 

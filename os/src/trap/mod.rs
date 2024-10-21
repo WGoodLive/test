@@ -1,14 +1,14 @@
 pub mod context;
 
-use crate::{mm::{TRAMPOLINE, TRAP_CONTEXT}, task::{current_trap_cx, current_user_token}, timer::set_next_trigger};
-use core::{arch::{asm, global_asm}, f32::INFINITY, task};
+use crate::{mm::{TRAMPOLINE, TRAP_CONTEXT}, task::processor::{current_trap_cx, current_user_token}, timer::set_next_trigger};
+use core::{arch::{asm, global_asm}};
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
 };
 use riscv::register::scause::Interrupt;
 pub use context::TrapContext;
 
-use crate::{syscall::syscall, task::{exit_current_and_run_next, TASK_MANAGER}};
+use crate::{syscall::syscall, task::{exit_current_and_run_next}};
 
 global_asm!(include_str!("trap.S"));
 
@@ -66,24 +66,29 @@ pub fn init(){
 
 #[no_mangle]
 /// handle an interrupt, exception, or system call from user space
-pub fn trap_handler(cx:&mut TrapContext) -> ! {
+pub fn trap_handler() -> ! {
     set_kernel_trap_entry();
-    let cx = current_trap_cx();
     let scause = scause::read(); // 中断原因
     let stval = stval::read();  // trap附加信息
     match scause.cause(){
         Trap::Exception(Exception::UserEnvCall)=>{
+            let mut cx = current_trap_cx();
             cx.sepc +=4;// 转下一个指令
-            cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize; // ？？？
+            // new_task里面的x[10]是0
+            let result = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]); // ？？？
+            
+            // cx在exec的时候可能被修改
+            cx = current_trap_cx();
+            cx.x[10] = result as usize;
         }
         Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) | Trap::Exception(Exception::LoadPageFault)=>{
             println!("[kernel] PageFault in application, kernel killed it.");
-            exit_current_and_run_next();
+            exit_current_and_run_next(-2);
         }
         // 如果打开了2_5priv_inst.rs,但是这个异常操作系统不处理(下面代码注释掉)，就是直接panic，结束shutdown
         Trap::Exception(Exception::IllegalInstruction)=>{
             println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            panic!("[kernel] Cannot continue!");
+            exit_current_and_run_next(-3);
             // exit_current_and_run_next();
         }
         Trap::Interrupt(Interrupt::SupervisorTimer)=>{

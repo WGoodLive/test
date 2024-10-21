@@ -2,189 +2,69 @@ mod context;
 mod switch;
 #[allow(clippy::module_inception)] // 允许跳过重复警告
 mod task;
-use crate::sbi::shutdown;
-use crate::sync::UPSafeCell;
+mod pid;
+
 use crate::config::*;
-use crate::trap::TrapContext;
-use alloc::vec::Vec;
+use alloc::sync::Arc;
 use lazy_static::*;
-use log::warn;
-use switch::__switch;
+use manager::add_task;
+use processor::{schedule, take_current_task};
 use crate::loader::*;
 use context::*;
 use task::*;
-pub struct TaskManager{
-    num_app:usize,
-    inner:UPSafeCell<TaskManagerInner>, // 这里字段让TaskManager成为Sync
-}
-
-struct TaskManagerInner{
-    tasks: Vec<TaskControlBlock>,// [TaskControlBlock; MAX_APP_NUM], // 每个任务的控制块
-    current_task: usize, // 当前任务id
-}
-
-impl TaskManager {
-    fn mark_current_suspended(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Ready;
-    }
-
-
-    fn mark_current_exited(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Exited;
-    }
-
-    fn run_next_task(&self){ 
-        if let Some(next) = self.find_next_task(){
-            // 如果find_next_task返回类型是Some，执行下面代码
-            let mut inner = self.inner.exclusive_access();
-            let current = inner.current_task;
-
-            inner.tasks[next].task_status = TaskStatus::Running;
-            inner.current_task = next;
-
-            // 这里不要使用ref，因为 这里有个as强制约束，加ref需要多行代码
-            let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
-            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
-            drop(inner);
-            // before this, we should drop local variables that must be dropped manually
-            unsafe {
-                __switch(current_task_cx_ptr, next_task_cx_ptr);
-            }
-        }
-        else {
-            warn!("All applications completed!");
-            shutdown(false);
-        }
-
-    }
-
-    /// 返回下一个task的id
-    fn find_next_task(&self) -> Option<usize>{
-        let inner = self.inner.exclusive_access(); 
-        let current = inner.current_task;
-        (current + 1..current + self.num_app + 1) 
-        // 这步很重要，相当于从这个app向后找，并且保证全覆盖
-        .map(|id| id % self.num_app)
-        .find(|id|inner.tasks[*id].task_status == TaskStatus::Ready)
-    }
-
-    fn run_first_task(&self) -> ! {
-        let mut inner = self.inner.exclusive_access();
-        let task0 = &mut inner.tasks[0];
-
-        task0.task_status = TaskStatus::Running;
-        let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
-        drop(inner);
-        let mut _unused = TaskContext::zero_init();
-
-        unsafe {
-            __switch((&mut _unused) as *mut TaskContext, next_task_cx_ptr);
-        }
-        panic!("unreachable in run_first_task");
-    }
-
-    fn get_current_token(&self) -> usize {
-
-        let inner = self.inner.exclusive_access();
-
-        let current = inner.current_task;
-
-        inner.tasks[current].get_user_token()
-
-    }
-
-
-    fn get_current_trap_cx(&self) -> &mut TrapContext {
-
-        let inner = self.inner.exclusive_access();
-
-        let current = inner.current_task;
-
-        inner.tasks[current].get_trap_cx()
-
-    }
-
-    fn change_current_program_brk(&self,size:i32) -> Option<usize>{
-        let mut inner = self.inner.exclusive_access();
-        let current_id = inner.current_task;
-        inner.tasks[current_id].change_program_brk(size)
-    }
-}
-
+pub mod manager;
+pub mod processor;
 
 
 lazy_static!{
-    pub static ref TASK_MANAGER:TaskManager={
-        println!("init TASK_MANAGER");
-        let num_app = get_num_app();
-        println!("num_app = {}", num_app);
-        let mut tasks:Vec<TaskControlBlock> = Vec::new();
+    pub static ref INITPROC:Arc<TaskControlBlock> = Arc::new(
+        TaskControlBlock::new(get_app_data_by_name("initproc").unwrap())
+    );
+}
 
-        for i in 0..num_app {
-            tasks.push(TaskControlBlock::new(
-                get_app_data(i),
-                i,
-            ));
-        }
-
-        TaskManager {
-            num_app,
-            inner: unsafe { UPSafeCell::new(TaskManagerInner {
-                tasks,
-                current_task: 0,
-            })},
-        }
-      
-    };
-    
+pub fn add_initproc(){
+    add_task(INITPROC.clone()); // 这里为什么要克隆？？
 }
 
 
 pub fn suspend_current_and_run_next(){
-    mark_current_suspended();
-    run_next_task();
+
+    let task = take_current_task().unwrap();
+    
+    let mut task_inner = task.inner_exclusive_access();
+
+    let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
+    task_inner.task_status = TaskStatus::Ready;
+    drop(task_inner);
+
+    add_task(task); // task没有drop，因为他所有权在这个函数转移了
+    schedule(task_cx_ptr);
 }
 
-pub fn exit_current_and_run_next() {
-    mark_current_exited();
-    run_next_task();
-}
+pub fn exit_current_and_run_next(exit_code:i32) {
+    let task = take_current_task().unwrap(); // 这个会拿出当前任务所有权
+    
+    let mut inner = task.inner_exclusive_access();
 
-pub fn run_first_task(){
-    TASK_MANAGER.run_first_task();
-}
+    inner.task_status = TaskStatus::Zombie;
+    inner.exit_code = exit_code;
+    
+    {
+        let mut initproc_inner = INITPROC.inner_exclusive_access();
+        for child in inner.children.iter(){
+            child.inner_exclusive_access().parent = Some(Arc::downgrade(&INITPROC));
+            initproc_inner.children.push(child.clone());
+        }
+    }
 
-fn mark_current_suspended(){
-    TASK_MANAGER.mark_current_suspended();
-}
+    // 这个进程退出了，所以孩子进程也要被干掉
+    inner.children.clear(); // 这里没实现RAII,因为不能因为父亲不在了，直接把孩子进程删了
+    inner.memory_set.recycle_data_pages(); 
+    drop(inner);
+    drop(task);
 
-fn mark_current_exited(){
-    TASK_MANAGER.mark_current_exited();
-}
-
-
-fn run_next_task() {
-    TASK_MANAGER.run_next_task();
-}
-
-pub fn current_user_token() -> usize {
-
-    TASK_MANAGER.get_current_token()
-
-}
-
-
-pub fn current_trap_cx() -> &'static mut TrapContext {
-
-    TASK_MANAGER.get_current_trap_cx()
-
-}
-
-// 因为要修改运行的进程的断点，所以需要提供一个外部接口
-pub fn change_program_sbrk(size:i32) -> Option<usize>{
-    TASK_MANAGER.change_current_program_brk(size)
+    // 任务切换，当前任务的上下文被保存在相应的内核栈中，此时内核栈还没回收
+    // 但是由于这个应用不会再加入运行队列执行，所以上下文可以置0
+    let mut _unused = TaskContext::zero_init();
+    schedule(&mut _unused as *mut _);
 }

@@ -1,7 +1,8 @@
 use crate::config::*;
 use crate::trap::TrapContext;
 use core::arch::asm;
-
+use alloc::vec::Vec;
+use lazy_static::lazy_static;
 
 static KERNEL_STACK: [KernelStack; MAX_APP_NUM] = [
     KernelStack {data: [0; KERNEL_STACK_SIZE],}; MAX_APP_NUM
@@ -128,3 +129,42 @@ fn get_base_i(app_id:usize)->usize{
 //     )
 // }
 
+
+///通过name获取user/bin/name.rs的代码文件 
+pub fn get_app_data_by_name(name:&str) -> Option<&'static [u8]>{
+    let num_app = get_num_app();
+    (0..num_app).find(|&i| APP_NAMES[i]==name)
+    .map(|i|get_app_data(i))
+}
+
+pub fn list_app(){
+    println!("/**** APPS ****");
+    for app in APP_NAMES.iter() {
+        println!("{}", app);
+    }
+    println!("**************/")
+}
+
+lazy_static!{
+    static ref APP_NAMES:Vec<&'static str> = {
+        let num_app = get_num_app();
+        extern "C"{
+            fn _app_names();
+        }
+        let mut start = _app_names as usize as *const u8; // u8类型的指针
+        let mut v = Vec::new();
+        unsafe{
+            for _ in 0..num_app{
+                let mut end = start;
+                while end.read_volatile() != '\0' as u8 { // read_volatile():读取当前字节数
+                    end = end.add(1);// 移动指针
+                }
+                let slice = core::slice::from_raw_parts(start, end as usize - start as usize);
+                let str = core::str::from_utf8(slice).unwrap();
+                v.push(str);
+                start = end.add(1);
+            }
+        }
+        v
+    };
+}

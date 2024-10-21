@@ -7,6 +7,7 @@ pub struct TrapContext {
     pub sstatus: Sstatus, // 状态寄存器
     pub sepc: usize, // 异常程序计数器
 
+
     pub kernel_satp:usize, // 内核的stap，实际物理地址的直接映射
     pub kernel_sp:usize,   // 内核栈的sp位置
     pub trap_handler:usize, //  trap_handler 入口点的虚拟地址

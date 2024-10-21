@@ -2,14 +2,15 @@
 #![feature(linkage)]
 #![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
-
 #[macro_use]
 pub mod console;
 mod lang_items;
 mod syscall;
 
+
+/*---------------堆分配----------------- */
 use buddy_system_allocator::LockedHeap;
-use syscall::*;
+
 
 const USER_HEAP_SIZE: usize = 16384;
 
@@ -32,6 +33,8 @@ pub extern "C" fn _start() -> ! {
     }
     exit(main());
 }
+/*---------------------------------------------- */
+
 
 #[linkage = "weak"]
 #[no_mangle]
@@ -39,14 +42,13 @@ fn main() -> i32 {
     panic!("Cannot find main!");
 }
 
-pub fn read(fd: usize, buf: &mut [u8]) -> isize {
-    sys_read(fd, buf)
-}
+use syscall::*;
+
 pub fn write(fd: usize, buf: &[u8]) -> isize {
     sys_write(fd, buf)
 }
 pub fn exit(exit_code: i32) -> ! {
-    sys_exit(exit_code);
+    sys_exit(exit_code)
 }
 pub fn yield_() -> isize {
     sys_yield()
@@ -54,6 +56,15 @@ pub fn yield_() -> isize {
 pub fn get_time() -> isize {
     sys_get_time()
 }
+
+pub fn sbrk(size: i32) -> isize {
+    sys_sbrk(size)
+}
+
+pub fn read(fd: usize, buf: &mut [u8]) -> isize {
+    sys_read(fd, buf)
+}
+
 pub fn getpid() -> isize {
     sys_getpid()
 }
@@ -63,13 +74,13 @@ pub fn fork() -> isize {
 pub fn exec(path: &str) -> isize {
     sys_exec(path)
 }
-pub fn wait(exit_code: &mut i32) -> isize {
-    loop {
-        match sys_waitpid(-1, exit_code as *mut _) {
-            -2 => {
+
+pub fn wait(exit_code: &mut i32)->isize{
+    loop{
+        match sys_waitpid(-1, exit_code as *mut _) {  // 父进程保存返回码的地址作为参数，给子进程存放返回码位置
+            -2 =>{
                 yield_();
             }
-            // -1 or a real pid
             exit_pid => return exit_pid,
         }
     }
@@ -86,9 +97,10 @@ pub fn waitpid(pid: usize, exit_code: &mut i32) -> isize {
         }
     }
 }
-pub fn sleep(period_ms: usize) {
+
+pub fn sleep(period_ms:usize){
     let start = sys_get_time();
-    while sys_get_time() < start + period_ms as isize {
+    while sys_get_time()< start+period_ms as isize {
         sys_yield();
     }
 }
