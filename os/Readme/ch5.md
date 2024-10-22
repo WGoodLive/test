@@ -283,6 +283,25 @@ pub fn run_tasks() {
 
 
 - 如何实现fork父子返回值不同的
+
+```rust
+pub fn sys_fork()->isize{
+    let current_task = current_task().unwrap();
+    let new_task = current_task.fork();
+    
+    let new_pid = new_task.pid.0;
+
+    let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+
+    trap_cx.x[10] = 0; // 由于new_task是子程序，返回值为0
+    add_task(new_task);
+    new_pid as isize // x[10]返回值为new_pid
+}
+
+```
+
+通过第9行：`trap_cx.x[10] = 0;`在返回的时候把任务控制块中的trap.cx的函数返回值寄存器值修改为0
+
 - switch怎么运行的
 
 到目前位置，有点巧妙的是：父进程通过参数传入指针，然后子进程仿佛通过这个`真实地址`返回自己的一些信息在这位置，然后父进程再读这个位置的信息！！
