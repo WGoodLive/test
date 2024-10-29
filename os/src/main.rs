@@ -28,7 +28,7 @@
 #[path = "boards/qemu.rs"]
 mod board;
 extern crate alloc;
-mod mm;
+pub mod mm;
 
 use core::arch::{global_asm,asm};
 use loader::load_apps;
@@ -42,6 +42,7 @@ mod sync;
 mod logging;
 mod lang_items;
 mod timer;
+mod drivers;
 mod sbi;// 用户最小化环境构建
 pub mod syscall;
 pub mod trap;
@@ -49,7 +50,7 @@ pub mod config;
 pub mod task;
 // pub mod batch; // 应用加载 + 执行切换
 pub mod loader; // 应用加载
-
+mod fs;
 #[macro_use]
 extern crate bitflags;
 
@@ -112,16 +113,13 @@ pub fn rust_main() -> ! {
     clear_bss();
     println!("[kernel] Hello, world!");
     mm::init();
-    println!("[kernel] back to world!");
-    remap_test();
-    // mm::heap_allocator::heap_test();
-    task::add_initproc();
+    mm::remap_test();
     trap::init();
-    //trap::enable_interrupt();
-    // trap::enable_timer_interrupt();
-    // timer::set_next_trigger();
-    loader::list_app();
-    task::processor::run_tasks();
+    trap::enable_timer_interrupt();
+    timer::set_next_trigger();
+    fs::list_apps();
+    task::add_initproc();
+    task::run_tasks();
     panic!("Unreachable in rust_main!");
 }
 // pub fn rust_main() -> !{ 

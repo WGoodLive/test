@@ -218,3 +218,62 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
+
+/// ------用户地址空间的文件缓存(由于都储存在内存中),一个文件一个UserBufffer,-----   
+/// **上面的理解出问题了**，  
+/// 这个结构体就是对File接口实现写入数据的一种抽象
+/// 用户的缓存就是文件描述符，跟这个没关系，目前来说
+pub struct UserBuffer{
+    pub buffers:Vec<&'static mut [u8]>
+}
+
+impl UserBuffer {
+    pub fn new(buffers: Vec<&'static mut [u8]>) -> Self {
+        Self { buffers }
+    }
+    pub fn len(&self) -> usize {
+        let mut total: usize = 0;
+        for b in self.buffers.iter() {
+            total += b.len();
+        }
+        total
+    }
+}
+
+pub struct UserBufferIterator {
+    buffers: Vec<&'static mut [u8]>,
+    current_buffer: usize, // 当前是第几块缓存
+    current_idx: usize,     // 当前的缓存的数据指针
+}
+
+/// 一次读取一个u8数据
+impl IntoIterator for UserBuffer{
+    type Item = *mut u8;
+    type IntoIter = UserBufferIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        UserBufferIterator {
+            buffers: self.buffers,
+            current_buffer: 0,
+            current_idx: 0,
+        }
+    }
+}
+
+impl Iterator for UserBufferIterator {
+    type Item = *mut u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_buffer >= self.buffers.len() {
+            None
+        } else {
+            let r = &mut self.buffers[self.current_buffer][self.current_idx] as *mut _;
+            if self.current_idx + 1 == self.buffers[self.current_buffer].len() {
+                self.current_idx = 0;
+                self.current_buffer += 1;
+            } else {
+                self.current_idx += 1;
+            }
+            Some(r)
+        }
+    }
+}

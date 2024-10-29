@@ -16,11 +16,12 @@ pub enum TaskStatus{
 }
 
 use core::cell::RefMut;
+use alloc::vec;
+use alloc::{sync::{Arc, Weak}, task, vec::{Vec}};
 
-use alloc::{sync::{Arc, Weak}, task, vec::Vec};
 
-
-use crate::{mm::{address::{PhysPageNum, VirtAddr}, memory_set::{MapPermission, MemorySet}, KERNEL_SPACE}, sync::UPSafeCell, trap::{trap_handler, TrapContext}};
+use crate::fs::{Stdin, Stdout};
+use crate::{fs::File, mm::{address::{PhysPageNum, VirtAddr}, memory_set::{MapPermission, MemorySet}, KERNEL_SPACE}, sync::UPSafeCell, trap::{trap_handler, TrapContext}};
 
 use super::{context::TaskContext, kernel_stack_position, pid::{pid_alloc, KernelStack, PidHandle}, TRAP_CONTEXT};
 
@@ -40,6 +41,10 @@ pub struct TaskControlBlockInner{
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: i32,
+    // 实现File + Send + Sync的结构体
+    // Option使得我们可以区分一个文件描述符当前是否空闲，当它是 None 的时候是空闲的
+    // Arc:可能会有多个进程共享同一个文件对它进行读写。此外被它包裹的内容会被放到内核堆而不是栈上,编译的时候不用固定大小
+    pub fd_table:Vec<Option<Arc<dyn File + Send + Sync>>> 
 }
 
 pub struct TaskControlBlock{
@@ -84,6 +89,14 @@ impl TaskControlBlock{
                     parent: None,
                     children: Vec::new(),
                     exit_code: 0,
+                    fd_table:vec![
+                        // 标准输入
+                        Some(Arc::new(Stdin)),
+                        // 标准输出
+                        Some(Arc::new(Stdout)),
+                        // 当程序执行过程中发生错误时，错误信息会被发送到stderr流中显示在屏幕，然后Stdout仍然被别的进程使用
+                        Some(Arc::new(Stdout))
+                    ],
                 }})      
             }
         };
@@ -139,6 +152,17 @@ impl TaskControlBlock{
         let pid_handle = pid_alloc();
         let kernel_stack = KernelStack::new(&pid_handle);
         let kernel_stack_top = kernel_stack.get_top();
+
+        // copy fd table
+        let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
+        for fd in parent_inner.fd_table.iter() {
+            if let Some(file) = fd {
+                new_fd_table.push(Some(file.clone()));
+            } else {
+                new_fd_table.push(None);
+            }
+        }
+
         let task_control_block = Arc::new(TaskControlBlock{
             pid:pid_handle,
             kernel_stack,
@@ -156,6 +180,7 @@ impl TaskControlBlock{
                     parent:Some(Arc::downgrade(self)),
                     children:Vec::new(),
                     exit_code:0,
+                    fd_table:new_fd_table,
                 })
             }
         });
@@ -210,6 +235,16 @@ impl TaskControlBlockInner {
             Some(old_brk)
         }else {
             None
+        }
+    }
+
+    /// 分配文件描述符，也就是对应用对自己文件的别名
+    pub fn alloc_fd(&mut self) -> usize {
+        if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
+            fd
+        } else {
+            self.fd_table.push(None);
+            self.fd_table.len() - 1
         }
     }
     

@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use riscv::{register::satp};
-use crate::{config::PAGE_SIZE, mm::{address::StepByOne, MEMORY_END, TRAMPOLINE, TRAP_CONTEXT, USER_STACK_SIZE}, println, sync::UPSafeCell};
+use crate::{config::{PAGE_SIZE,MMIO}, mm::{address::StepByOne, MEMORY_END, TRAMPOLINE, TRAP_CONTEXT, USER_STACK_SIZE}, println, sync::UPSafeCell};
 use super::{address::{PhysAddr, PhysPageNum, VPNRange, VirtAddr, VirtPageNum}, frame_allocator::{frame_alloc, FrameTracker},page_table::{PTEFlags, PageTable, PageTableEntry}};
 
 
@@ -234,6 +234,10 @@ extern "C" {
     fn strampoline();
 }
 
+pub fn kernel_token() -> usize {
+    KERNEL_SPACE.exclusive_access().token()
+}
+
 impl MemorySet{
     pub fn new_kernel() -> Self{
         // 应用空间初始化
@@ -281,6 +285,15 @@ impl MemorySet{
             MapType::Identical,
             MapPermission::R | MapPermission::W,
         ), None);
+        println!("mapping memory-mapped registers");
+        for pair in MMIO {
+            memory_set.push(MapArea::new(
+                (*pair).0.into(),
+                ((*pair).0 + (*pair).1).into(),
+                MapType::Identical,
+                MapPermission::R | MapPermission::W,
+            ), None);
+        }
         memory_set
     }
 

@@ -3,3 +3,9 @@ target/*
 build/
 .idea/
 Cargo.lock
+
+../easy-fs/target
+../easy-fs/Cargo.lock
+
+../easy-fs-fuse/target
+../easy-fs-fuse/Cargo.lock

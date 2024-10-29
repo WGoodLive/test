@@ -1,6 +1,6 @@
 use alloc::sync::Arc;
 
-use crate::{loader::get_app_data_by_name, mm::page_table::{translated_refmut, translated_str}, task::{exit_current_and_run_next, manager::add_task, processor::{change_program_sbrk, current_task, current_user_token}, suspend_current_and_run_next}, timer::get_time_ms};
+use crate::{fs::{inode::open_file, OpenFlags}, loader::get_app_data_by_name, mm::page_table::{translated_refmut, translated_str}, task::{exit_current_and_run_next, manager::add_task, processor::{change_program_sbrk, current_task, current_user_token}, suspend_current_and_run_next}, timer::get_time_ms};
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -29,9 +29,12 @@ pub fn sys_fork()->isize{
 pub fn sys_exec(path:*const u8)-> isize{
     let token = current_user_token();
     let path = translated_str(token, path);
-    if let Some(data) = get_app_data_by_name(path.as_str()){
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) { 
+        // 通过只读代码，就可以返回了，不会覆盖文件
+        // 这里将代码(文件驱动的内存那地方)与数据(DRAM的区域) 解耦合了！！！
+        let all_data = app_inode.read_all();
         let task = current_task().unwrap();
-        task.exec(data); // trap返回的程序变了，这个返回值意义不大了
+        task.exec(all_data.as_slice());// trap返回的程序变了，这个返回值意义不大了
         0
     }else{
         -1

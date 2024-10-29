@@ -4,7 +4,7 @@ mod switch;
 mod task;
 mod pid;
 
-use crate::config::*;
+use crate::{config::*, fs::{inode::open_file, OpenFlags}};
 use alloc::sync::Arc;
 use lazy_static::*;
 use manager::add_task;
@@ -17,9 +17,11 @@ pub mod processor;
 
 
 lazy_static!{
-    pub static ref INITPROC:Arc<TaskControlBlock> = Arc::new(
-        TaskControlBlock::new(get_app_data_by_name("initproc").unwrap())
-    );
+    pub static ref INITPROC:Arc<TaskControlBlock> = Arc::new({
+        let inode = open_file("initproc", OpenFlags::RDONLY).unwrap();
+        let v = inode.read_all();
+        TaskControlBlock::new(v.as_slice())
+    });
 }
 
 pub fn add_initproc(){

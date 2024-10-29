@@ -18,7 +18,7 @@ pub const VPN_WIDTH_SV39: usize = VA_WIDTH_SV39 - PAGE_SIZE_BITS;
 // ekernel指名内核的终止物理地址
 pub const MEMORY_END:usize = 0x80800000;
 
-pub use crate::board::CLOCK_FREQ;
+pub use crate::board::{CLOCK_FREQ,MMIO};
 
 pub const TRAMPOLINE:usize = usize::MAX - PAGE_SIZE + 1;
 pub const TRAP_CONTEXT: usize = TRAMPOLINE - PAGE_SIZE;
@@ -27,4 +27,5 @@ pub fn kernel_stack_position(app_id:usize)->(usize,usize){
     let bottom = top - KERNEL_STACK_SIZE;
     (bottom,top)
 }
+
 
