@@ -2,7 +2,6 @@
 
 
 
-const SBI_SET_TIMER:usize = 0;
 
 
 /// use sbi call to getchar from console (qemu uart handler)

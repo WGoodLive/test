@@ -1,9 +1,9 @@
 
 
-use crate::println;
+use crate::{PA_WIDTH_SV39, PPN_WIDTH_SV39, VA_WIDTH_SV39};
 
-use super::{VA_WIDTH_SV39, VPN_WIDTH_SV39};
-use super::{page_table::PageTableEntry, PAGE_SIZE, PAGE_SIZE_BITS, PA_WIDTH_SV39, PPN_WIDTH_SV39};
+use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
+use super::{page_table::PageTableEntry};
 use alloc::fmt::Debug;
 use alloc::fmt::Formatter;
 use alloc::fmt;
@@ -60,6 +60,10 @@ impl From<PhysPageNum> for usize {
 impl PhysAddr {
     pub fn page_offset(&self) ->usize{
         self.0 & (PAGE_SIZE-1)
+    }
+
+    pub fn get_ref<T>(&self) -> &'static T {
+        unsafe { (self.0 as *const T).as_ref().unwrap() }
     }
     
     // 这个不能直接右移，为啥

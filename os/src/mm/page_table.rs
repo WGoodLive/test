@@ -219,6 +219,16 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .get_mut()
 }
 
+#[allow(unused)]
+///Translate a generic through page table and return a reference
+pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
+    let page_table = PageTable::from_token(token);
+    page_table
+        .translate_va(VirtAddr::from(ptr as usize))
+        .unwrap()
+        .get_ref()
+}
+
 /// ------用户地址空间的文件缓存(由于都储存在内存中),一个文件一个UserBufffer,-----   
 /// **上面的理解出问题了**，  
 /// 这个结构体就是对File接口实现写入数据的一种抽象

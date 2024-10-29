@@ -23,7 +23,7 @@ use alloc::{sync::{Arc, Weak}, task, vec::{Vec}};
 use crate::fs::{Stdin, Stdout};
 use crate::{fs::File, mm::{address::{PhysPageNum, VirtAddr}, memory_set::{MapPermission, MemorySet}, KERNEL_SPACE}, sync::UPSafeCell, trap::{trap_handler, TrapContext}};
 
-use super::{context::TaskContext, kernel_stack_position, pid::{pid_alloc, KernelStack, PidHandle}, TRAP_CONTEXT};
+use super::{context::TaskContext, pid::{pid_alloc, KernelStack, PidHandle}, TRAP_CONTEXT};
 
 /// 任务控制块(很重要)
 pub struct TaskControlBlockInner{

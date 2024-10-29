@@ -31,15 +31,17 @@ extern crate alloc;
 pub mod mm;
 
 use core::arch::{global_asm,asm};
-use loader::load_apps;
+
 use log::{debug, error, info, trace, warn};
-use logging::init_Log;
-use mm::{frame_allocator::{frame_allocator_test, init_frame_allocator}, memory_set::remap_test};
+
+
+
+pub use config::*;
 // 使用宏
 #[macro_use]
 mod console;
 mod sync;
-mod logging;
+
 mod lang_items;
 mod timer;
 mod drivers;
@@ -49,7 +51,7 @@ pub mod trap;
 pub mod config;
 pub mod task;
 // pub mod batch; // 应用加载 + 执行切换
-pub mod loader; // 应用加载
+
 mod fs;
 #[macro_use]
 extern crate bitflags;

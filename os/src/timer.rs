@@ -1,5 +1,5 @@
 use riscv::register::time;
-const MSEC_PRE_SEC:usize = 1_000_000;
+const MSEC_PRE_SEC:usize = 1000;
 use crate::config::CLOCK_FREQ; 
 //常数 CLOCK_FREQ 是一个预先获取到的各平台不同的时钟频率，单位为赫兹，也就是一秒钟之内计数器的增量
 const TICKS_PER_SEC: usize = 100;
@@ -24,7 +24,7 @@ pub fn set_next_trigger() {
     set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
 }
 
-pub fn init_timer(){
-    crate::trap::enable_timer_interrupt(); // sie 使能
-    set_next_trigger();
-}
+// pub fn init_timer(){
+//     crate::trap::enable_timer_interrupt(); // sie 使能
+//     set_next_trigger();
+// }

@@ -3,18 +3,18 @@ mod switch;
 #[allow(clippy::module_inception)] // 允许跳过重复警告
 mod task;
 mod pid;
-
+pub use processor::run_tasks;
 use crate::{config::*, fs::{inode::open_file, OpenFlags}};
 use alloc::sync::Arc;
 use lazy_static::*;
 use manager::add_task;
 use processor::{schedule, take_current_task};
-use crate::loader::*;
+
 use context::*;
 use task::*;
 pub mod manager;
 pub mod processor;
-
+pub use processor::*;
 
 lazy_static!{
     pub static ref INITPROC:Arc<TaskControlBlock> = Arc::new({

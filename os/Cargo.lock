@@ -117,6 +117,7 @@ checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
 [[package]]
 name = "riscv"
 version = "0.6.0"
+source = "git+https://github.com/rcore-os/riscv#11d43cf7cccb3b62a3caaf3e07a1db7449588f9a"
 dependencies = [
  "bare-metal",
  "bit_field",

@@ -1,6 +1,11 @@
+use crate::fs::{open_file, OpenFlags};
+use crate::mm::{translated_refmut, translated_str};
+use crate::task::{
+    manager::add_task, current_task, current_user_token, exit_current_and_run_next,
+    suspend_current_and_run_next,
+};
+use crate::timer::get_time_ms;
 use alloc::sync::Arc;
-
-use crate::{fs::{inode::open_file, OpenFlags}, loader::get_app_data_by_name, mm::page_table::{translated_refmut, translated_str}, task::{exit_current_and_run_next, manager::add_task, processor::{change_program_sbrk, current_task, current_user_token}, suspend_current_and_run_next}, timer::get_time_ms};
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -81,11 +86,4 @@ pub fn sys_getpid() -> isize {
     current_task().unwrap().pid.0 as isize
 }
 
-pub fn sys_sbrk(size:i32) -> isize{
-    if let Some(old_brk) = change_program_sbrk(size){
-        old_brk as isize
-    }
-    else{
-        -1
-    }
-}
+
