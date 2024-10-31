@@ -16,13 +16,17 @@ pub enum TaskStatus{
 }
 
 use core::cell::RefMut;
+use alloc::string::String;
 use alloc::vec;
 use alloc::{sync::{Arc, Weak}, task, vec::{Vec}};
 
 
 use crate::fs::{Stdin, Stdout};
+use crate::mm::translated_refmut;
 use crate::{fs::File, mm::{address::{PhysPageNum, VirtAddr}, memory_set::{MapPermission, MemorySet}, KERNEL_SPACE}, sync::UPSafeCell, trap::{trap_handler, TrapContext}};
 
+use super::action::SignalActions;
+use super::signal::SignalFlags;
 use super::{context::TaskContext, pid::{pid_alloc, KernelStack, PidHandle}, TRAP_CONTEXT};
 
 /// 任务控制块(很重要)
@@ -44,7 +48,25 @@ pub struct TaskControlBlockInner{
     // 实现File + Send + Sync的结构体
     // Option使得我们可以区分一个文件描述符当前是否空闲，当它是 None 的时候是空闲的
     // Arc:可能会有多个进程共享同一个文件对它进行读写。此外被它包裹的内容会被放到内核堆而不是栈上,编译的时候不用固定大小
-    pub fd_table:Vec<Option<Arc<dyn File + Send + Sync>>> 
+    pub fd_table:Vec<Option<Arc<dyn File + Send + Sync>>>,
+
+    /* 信号进入进程的门槛与函数例程 */
+    // 进程对信号的全局掩码
+    pub signal_mask:SignalFlags,
+    // 进程的函数例程
+    pub signal_actions:SignalActions,
+
+    /* 信号的捕获之后 信息+状态 */
+    // 进程目前还有哪些待处理信号
+    pub signals:SignalFlags,
+    // 进程是否被杀死，不是是否被捕获
+    pub killed:bool,
+    // 进程收到SIGSTOP然后被暂停执行，等待SIGCONT
+    pub frozen:bool,
+    // 正在处理的信号
+    pub handling_sig:isize,
+    // 处理信号的时候，储存trap_cx
+    pub trap_ctx_backup: Option<TrapContext>,
 }
 
 pub struct TaskControlBlock{
@@ -97,6 +119,13 @@ impl TaskControlBlock{
                         // 当程序执行过程中发生错误时，错误信息会被发送到stderr流中显示在屏幕，然后Stdout仍然被别的进程使用
                         Some(Arc::new(Stdout))
                     ],
+                    signals:SignalFlags::empty(),
+                    signal_mask:SignalFlags::empty(),
+                    signal_actions:SignalActions::default(),
+                    killed:false,
+                    frozen:false,
+                    handling_sig:-1,
+                    trap_ctx_backup:None
                 }})      
             }
         };
@@ -112,28 +141,68 @@ impl TaskControlBlock{
         
         task_control_block
     }
-    pub fn exec(&self, elf_data: &[u8]) {
+    pub fn exec(&self, elf_data: &[u8],args:Vec<String>) {
         // 获取子程序的Elf信息
         // from_elf是自己封装的方法，所以可以提取出想要的信息
         // memory_set是含有satp与真实物理页的
-        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let (memory_set, mut user_sp, entry_point) = MemorySet::from_elf(elf_data);
         let trap_cx_pnn = memory_set.translate( // 复制vpn的页表项
             VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap().ppn();
+
+        // 放参数进入用户栈
+        user_sp -= (args.len() + 1)*core::mem::size_of::<usize>();
+        // 栈方向生长，先储存 `命令行参数 + 0`个指针
+        // 先减是因为：数据是低到高
+        let argv_base = user_sp;
+        // 此时argv_base就是储存完命令号参数指针之后的栈指针位置
+
+        // 接下来储存命令行参数指针的位置的引用得到
+        let mut argv:Vec<_> =(0..=args.len())
+            .map(|arg|{
+                translated_refmut(
+                    memory_set.token(),
+                        (argv_base + arg * core::mem::size_of::<usize>()) as *mut usize)
+            }).collect();
+
+        
+        *argv[args.len()] = 0;
+        for i in 0..args.len() {
+            // 预留 命令行的String 的位置，+1放`/0`
+            user_sp -= args[i].len() + 1;
+            // 让命令行的String指针改为上面的地址，
+            *argv[i] = user_sp;
+            // p作为一会的偏移，字节方式存String
+            let mut p = user_sp;
+            // 把字符串转换成字节，然后依次取出来
+            for c in args[i].as_bytes() {
+                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+                p += 1;
+            }
+            // 最后加一个`\0`
+            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        }
+        // 数据对齐到8B,防止访存不对齐报错
+        user_sp -= user_sp % core::mem::size_of::<usize>();
+
         let mut inner = self.inner_exclusive_access();
         inner.memory_set = memory_set; // 旧的memory_set会被释放
         inner.trap_cx_ppn =  trap_cx_pnn;
 
-        let trap_cx = inner.get_trap_cx();
         // 因为这个trap_cx是我们定的，所以需要我们在里面增加内容
-        *trap_cx = TrapContext::app_init_context(
+        let mut trap_cx = TrapContext::app_init_context(
             entry_point,
             user_sp,
             KERNEL_SPACE.exclusive_access().token(),
             self.kernel_stack.get_top(),
             trap_handler as usize,
         );
-        
+
+        // 下次回到用户空间，返回值前者是命令行参数个数(含\0),后者是数据与指针接壤的地方
+        // fork修改x[10]之后，他会先回到用户空间，再运行exec,这俩个x[10]不会冲突
+        trap_cx.x[10] = args.len();
+        trap_cx.x[11] = argv_base;
+        *inner.get_trap_cx() = trap_cx;
         
     }
     pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
@@ -181,6 +250,14 @@ impl TaskControlBlock{
                     children:Vec::new(),
                     exit_code:0,
                     fd_table:new_fd_table,
+
+                    signals:SignalFlags::empty(),
+                    signal_mask:parent_inner.signal_mask,
+                    handling_sig:-1,
+                    signal_actions:parent_inner.signal_actions.clone(),
+                    killed:false,
+                    frozen:false,
+                    trap_ctx_backup:None,
                 })
             }
         });

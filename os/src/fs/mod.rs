@@ -1,6 +1,6 @@
 pub mod inode;
 pub mod stdio;
-
+pub mod pipe;
 pub use stdio::{Stdin,Stdout};
 
 

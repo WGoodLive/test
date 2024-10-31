@@ -1,6 +1,6 @@
 pub mod context;
 
-use crate::{ task::processor::{current_trap_cx, current_user_token}, timer::set_next_trigger, TRAMPOLINE, TRAP_CONTEXT};
+use crate::{ task::{check_signals_error_of_current, current_add_signal, handle_signals, processor::{current_trap_cx, current_user_token}, signal::SignalFlags}, timer::set_next_trigger, TRAMPOLINE, TRAP_CONTEXT};
 use core::{arch::{asm, global_asm}};
 use riscv::register::{
     scause::{self,Exception,Trap}, stval, stvec, utvec::TrapMode
@@ -81,14 +81,19 @@ pub fn trap_handler() -> ! {
             cx = current_trap_cx();
             cx.x[10] = result as usize;
         }
-        Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) | Trap::Exception(Exception::LoadPageFault)=>{
-            println!("[kernel] PageFault in application, kernel killed it.");
-            exit_current_and_run_next(-2);
+        Trap::Exception(Exception::StoreFault)
+        | Trap::Exception(Exception::StorePageFault)
+        | Trap::Exception(Exception::InstructionFault)
+        | Trap::Exception(Exception::InstructionPageFault)
+        | Trap::Exception(Exception::LoadFault)
+        | Trap::Exception(Exception::LoadPageFault)=>{
+            current_add_signal(SignalFlags::SIGSEGV); // 同步信号，会直接trap的
         }
         // 如果打开了2_5priv_inst.rs,但是这个异常操作系统不处理(下面代码注释掉)，就是直接panic，结束shutdown
         Trap::Exception(Exception::IllegalInstruction)=>{
-            println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            exit_current_and_run_next(-3);
+            current_add_signal(SignalFlags::SIGILL);
+            // println!("[kernel] IllegalInstruction in application, kernel killed it.");
+            // exit_current_and_run_next(-3);
             // exit_current_and_run_next();
         }
         Trap::Interrupt(Interrupt::SupervisorTimer)=>{
@@ -104,6 +109,16 @@ pub fn trap_handler() -> ! {
             ); // 任何代码一旦panic,不可恢复
         }
     }
+
+    handle_signals();
+    // 由于中断是进程自己提出的，所以，他必须在取消Stop暂停之后，才行，不会冲突
+    // 所以loop的时候，尽管abort也会kill进程，但是不用修改状态，直接下面检查错误可以直接退出
+    // 检查当前进程状态，是否被信号解决掉
+    if let Some((errno, msg)) = check_signals_error_of_current() {
+        println!("[kernel] {}", msg);
+        exit_current_and_run_next(errno);
+    }
+
     trap_return();
 }
 

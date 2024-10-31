@@ -1,12 +1,13 @@
+use alloc::sync::Arc;
 use alloc::task;
 
 use crate::fs::inode::open_file;
-use crate::fs::OpenFlags;
-use crate::mm::{translated_str, UserBuffer};
+use crate::fs::pipe::make_pipe;
+use crate::fs::{pipe, OpenFlags};
+use crate::mm::{translated_refmut, translated_str, UserBuffer};
 use crate::task::processor::{current_task, current_user_token};
 use crate::{mm::translated_byte_buffer};
 
-const FD_STDIN: usize = 0;
 /// 因为sys_write写入的变化，所以原来的sys_read的console_getchar已经不需要了
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
@@ -26,7 +27,6 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     }
 }
 
-const FD_STDOUT:usize = 1;
 
 pub fn sys_write(fd:usize,buf:*const u8,len:usize) -> isize{
     let token = current_user_token();
@@ -80,4 +80,41 @@ pub fn sys_close(fd: usize) -> isize {
     }
     inner.fd_table[fd].take(); // 将这个Arc变成None，就说明这个文件描述符失效了，文件不存在
     0
+}
+
+pub fn sys_pipe(pipe:*mut usize)->isize{
+    let task = current_task().unwrap();
+    let token = current_user_token();
+    let mut inner = task.inner_exclusive_access();
+    let (pipe_read,pipe_write) = make_pipe();
+
+    let read_fd = inner.alloc_fd();
+    inner.fd_table[read_fd] = Some(pipe_read);
+    let write_fd = inner.alloc_fd();
+    inner.fd_table[write_fd] = Some(pipe_write);
+
+    // pipe[0] = read_fd
+    *translated_refmut(token, pipe) = read_fd;
+    // pipe[1] = write_fd
+    *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd;
+    0
+}
+
+/// 功能：将进程中一个已经打开的文件复制一份并分配到一个新的文件描述符中。
+/// 参数：fd 表示进程中一个已经打开的文件的文件描述符。
+/// 返回值：如果出现了错误则返回 -1，否则能够访问已打开文件的新文件描述符。
+/// 可能的错误原因是：传入的 fd 并不对应一个合法的已打开文件。
+/// syscall ID：24
+pub fn sys_dup(fd: usize) -> isize {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if inner.fd_table[fd].is_none() {
+        return -1;
+    }
+    let new_fd = inner.alloc_fd();
+    inner.fd_table[new_fd] = Some(Arc::clone(inner.fd_table[fd].as_ref().unwrap()));
+    new_fd as isize
 }
