@@ -523,6 +523,26 @@ pub fn sys_sigreturn() -> isize {
 
 
 
+### 问题
+
+执行`cat.rs`的时候总是说`assert!(args==len)`恐慌，我就想着是不是命令行参数解析出问题了，所以我看看`sys_exec`
+
+```rust
+os/src/syscall/processor.rs/
+sys_exec函数  {
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) { 
+        // 通过只读代码，就可以返回了，不会覆盖文件
+        // 这里将代码(文件驱动的内存那地方)与数据(DRAM的区域) 解耦合了！！！
+        let all_data = app_inode.read_all();
+        let task = current_task().unwrap();
+        ---->  let argc = args_vec.len();
+        task.exec(all_data.as_slice(),args_vec);// trap返回的程序变了，这个返回值意义不大了
+        -----> argc as isize  //  这里不能返回特定值，需要返回参数个数
+}
+```
+
+
+
 ### 待解决
 
 - 分别编写基于UNIX的signal机制的Linux应用程序，实现进程间异步通知

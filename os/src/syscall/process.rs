@@ -56,8 +56,9 @@ pub fn sys_exec(path:*const u8,mut args: *const usize)-> isize{
         // 这里将代码(文件驱动的内存那地方)与数据(DRAM的区域) 解耦合了！！！
         let all_data = app_inode.read_all();
         let task = current_task().unwrap();
+        let argc = args_vec.len();
         task.exec(all_data.as_slice(),args_vec);// trap返回的程序变了，这个返回值意义不大了
-        0
+        argc as isize
     }else{
         -1
     }
