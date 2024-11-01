@@ -7,6 +7,7 @@ use crate::task::action::SignalAction;
 pub use crate::task::processor::*;
 use fs::{sys_close, sys_dup, sys_open, sys_read, sys_write};
 use process::*;
+use thread::{sys_gettid, sys_thread_create, sys_waittid};
 const SYSCALL_DUP: usize = 24;
 const SYSCALL_OPEN: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
@@ -24,6 +25,10 @@ const SYSCALL_GETPID: usize = 172;
 const SYSCALL_FORK: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAITPID: usize = 260;
+
+const SYSCALL_THREAD_CREATE: usize = 1000;
+const SYSCALL_GETTID: usize = 1001;
+const SYSCALL_WAITTID: usize = 1002;
 
 
 
@@ -54,5 +59,8 @@ pub fn syscall(syscall_id:usize,args:[usize;3])->isize{
         SYSCALL_EXEC => sys_exec(args[0] as *const u8,args[1] as *const usize),
         SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32),
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
+        SYSCALL_THREAD_CREATE => sys_thread_create(args[0], args[1]),
+        SYSCALL_GETTID => sys_gettid(),
+        SYSCALL_WAITTID => sys_waittid(args[0]) as isize,
     }
 }

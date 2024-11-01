@@ -136,7 +136,10 @@ impl File for OSInode {
 pub fn list_apps() {
     println!("/**** APPS ****");
     for app in ROOT_INODE.ls() {
-        println!("{}", app);
+    //     for _ in 0..3{
+    //         print!("{}   ", app);
+    //     }
+        println!("{}   ", app);
     }
     println!("**************/")
 }
