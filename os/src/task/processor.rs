@@ -1,6 +1,7 @@
+//! 当前的调度单位...不是进程控制块，麻了
 use alloc::{sync::Arc};
 
-use super::{manager::fetch_task, signal::SignalFlags, switch::__switch, TaskControlBlock, TaskStatus};
+use super::{manager::fetch_task, process::ProcessControlBlock, signal::SignalFlags, switch::__switch, TaskControlBlock, TaskStatus};
 use crate::{sync::UPSafeCell, task::TaskContext, trap::TrapContext};
 use lazy_static::lazy_static;
 /// 保存当前的进程信息
@@ -36,7 +37,8 @@ impl Processor {
 
     fn change_current_program_brk(&self,size:i32) -> Option<usize>{
         let task = self.current().unwrap();
-        let mut inner = task.inner_exclusive_access();
+        let process = task.process.upgrade().unwrap();
+        let mut inner = process.inner_exclusive_access();
         inner.change_program_brk(size)
     }
 }
@@ -55,16 +57,30 @@ pub fn current_task() -> Option<Arc<TaskControlBlock>> {
 
 
 pub fn current_user_token() -> usize {
-    let task = current_task().unwrap();
-    let token = task.inner_exclusive_access().get_user_token();
+    let process = current_process();
+    let token = process.inner_exclusive_access().get_user_token();
     token
-
 }
 
-/// 返回trap上下文：里面包含内核的一些东西
+pub fn current_process() -> Arc<ProcessControlBlock> {
+    current_task().unwrap().process.upgrade().unwrap()
+}
+
+/// 返回trap上下文
 pub fn current_trap_cx() -> &'static mut TrapContext {
     current_task().unwrap().inner_exclusive_access().get_trap_cx()
 }
+/// 返回线程的trap上下文，在进程地址空间的虚拟地址
+pub fn current_trap_cx_user_va() -> usize {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .res
+        .as_ref()
+        .unwrap()
+        .trap_cx_user_va()
+}
+
 
 pub fn run_tasks(){
     loop{

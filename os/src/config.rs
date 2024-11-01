@@ -16,3 +16,6 @@ pub const PA_WIDTH_SV39: usize = 56;
 pub const VA_WIDTH_SV39: usize = 39;
 pub const PPN_WIDTH_SV39: usize = PA_WIDTH_SV39 - PAGE_SIZE_BITS;
 pub const VPN_WIDTH_SV39: usize = VA_WIDTH_SV39 - PAGE_SIZE_BITS;
+
+
+pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;

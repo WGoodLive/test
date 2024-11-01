@@ -8,11 +8,13 @@ use crate::mm::{translated_refmut, translated_str, UserBuffer};
 use crate::task::processor::{current_task, current_user_token};
 use crate::{mm::translated_byte_buffer};
 
+use super::current_process;
+
 /// 因为sys_write写入的变化，所以原来的sys_read的console_getchar已经不需要了
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
-    let task = current_task().unwrap();
-    let inner = task.inner_exclusive_access();
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
         return -1;
     }
@@ -30,8 +32,8 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
 
 pub fn sys_write(fd:usize,buf:*const u8,len:usize) -> isize{
     let token = current_user_token();
-    let task = current_task().unwrap();
-    let inner = task.inner_exclusive_access();
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len(){
         return -1;
     }
@@ -52,14 +54,15 @@ pub fn sys_write(fd:usize,buf:*const u8,len:usize) -> isize{
 /// 返回值：如果出现了错误则返回 -1，否则返回打开常规文件的文件描述符。可能的错误原因是：文件不存在。
 /// syscall ID：56
 pub fn sys_open(path: *const u8, flags: u32) -> isize{
-    let task = current_task().unwrap();
     let token = current_user_token();
+    let process = current_process();
+
     let path = translated_str(token, path);
     if let Some(inode) = open_file(
         path.as_str(),
         OpenFlags::from_bits(flags).unwrap()
     ){
-        let mut inner = task.inner_exclusive_access();
+        let mut inner = process.inner_exclusive_access();
         let fd = inner.alloc_fd();
         inner.fd_table[fd] = Some(inode); 
         fd as isize
@@ -70,8 +73,8 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize{
 
 /// 关闭成功0,关闭失败-1（文件不存在）
 pub fn sys_close(fd: usize) -> isize {
-    let task = current_task().unwrap();
-    let mut inner = task.inner_exclusive_access();
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len() { // 文件描述符越界了
         return -1;
     }
@@ -83,9 +86,9 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 pub fn sys_pipe(pipe:*mut usize)->isize{
-    let task = current_task().unwrap();
+    let process = current_process();
     let token = current_user_token();
-    let mut inner = task.inner_exclusive_access();
+    let mut inner = process.inner_exclusive_access();
     let (pipe_read,pipe_write) = make_pipe();
 
     let read_fd = inner.alloc_fd();
@@ -106,8 +109,8 @@ pub fn sys_pipe(pipe:*mut usize)->isize{
 /// 可能的错误原因是：传入的 fd 并不对应一个合法的已打开文件。
 /// syscall ID：24
 pub fn sys_dup(fd: usize) -> isize {
-    let task = current_task().unwrap();
-    let mut inner = task.inner_exclusive_access();
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
         return -1;
     }

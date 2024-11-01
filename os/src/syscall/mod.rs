@@ -2,6 +2,7 @@
 // 而只是根据 syscall ID 分发到具体的处理函数
 mod fs;
 mod process;
+mod thread;
 use crate::task::action::SignalAction;
 pub use crate::task::processor::*;
 use fs::{sys_close, sys_dup, sys_open, sys_read, sys_write};
@@ -23,6 +24,8 @@ const SYSCALL_GETPID: usize = 172;
 const SYSCALL_FORK: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAITPID: usize = 260;
+
+
 
 const FD_STDOUT:usize = 1;
 const FD_STDIN:usize = 0;
