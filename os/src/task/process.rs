@@ -5,6 +5,7 @@ use alloc::{sync::{Arc, Weak}, vec::{Vec}};
 
 use crate::fs::{Stdin, Stdout};
 use crate::mm::{translated_refmut, VirtAddr};
+use crate::sync::mutex::Mutex;
 use crate::{fs::File, mm::{MemorySet, KERNEL_SPACE}, sync::UPSafeCell, trap::{trap_handler, TrapContext}};
 
 use super::{action::SignalActions, id::{pid_alloc, PidHandle, RecycleAllocator}, manager::{add_task, insert_into_pid2process}, signal::SignalFlags, TaskControlBlock};
@@ -257,7 +258,12 @@ pub struct ProcessControlBlockInner{
     pub handling_sig:isize,
     // 处理信号的时候，储存trap_cx
     pub trap_ctx_backup: Option<TrapContext>,
-
+    // 锁(获取相同锁的线程会阻塞)
+    pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
+    // 信号量
+    pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
+    // 条件变量
+    pub condvar_list: Vec<Option<Arc<Condvar>>>,
 }
 
 impl ProcessControlBlockInner {

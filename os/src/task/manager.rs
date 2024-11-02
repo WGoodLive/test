@@ -85,3 +85,11 @@ pub fn insert_into_pid2process(pid: usize, process: Arc<ProcessControlBlock>) {
 pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
     TASK_MANAGER.exclusive_access().fetch()
 }
+
+/// 唤醒任务
+pub fn wakeup_task(task: Arc<TaskControlBlock>) {
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.task_status = TaskStatus::Ready;
+    drop(task_inner);
+    add_task(task);
+}

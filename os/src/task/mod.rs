@@ -44,10 +44,21 @@ pub fn suspend_current_and_run_next(){
     let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     task_inner.task_status = TaskStatus::Ready;
     drop(task_inner);
-
     add_task(task); // task没有drop，因为他所有权在这个函数转移了
     schedule(task_cx_ptr);
 }
+
+/// 阻塞当前，运行下一个
+pub fn block_current_and_run_next() {
+    // 当前任务被移出
+    let task = take_current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
+    task_inner.task_status = TaskStatus::Blocked;
+    drop(task_inner);
+    schedule(task_cx_ptr);
+}
+
 
 pub fn exit_current_and_run_next(exit_code:i32) {
     // 把当前任务从 正在调度的任务中 拿出来，后面让主进程的主线程进去
@@ -265,5 +276,5 @@ pub fn check_signals_error_of_current() -> Option<(i32, &'static str)> {
 /// 移出无效线程
 pub fn remove_inactive_task(task: Arc<TaskControlBlock>) {
     remove_task(Arc::clone(&task));
-    // remove_timer(Arc::clone(&task));
+    remove_timer(Arc::clone(&task));
 }

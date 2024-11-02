@@ -16,6 +16,7 @@ pub enum TaskStatus{
     Running, // 正在运行
     Exited, // 已退出
     Zombie, // 僵尸进程
+    Blocked, // 阻塞态
 }
 
 use core::cell::RefMut;

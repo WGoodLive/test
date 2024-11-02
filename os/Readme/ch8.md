@@ -463,31 +463,950 @@ int pthread_join(pthread_t thread, void **retval); //线程等待另个线程退
 
 
 
-```
-let task = current_task().unwrap();
-    let process = task.process.upgrade().unwrap();
-    let task_inner = task.inner_exclusive_access();
-    let mut process_inner = process.inner_exclusive_access();
-    // a thread cannot wait for itself
-    if task_inner.res.as_ref().unwrap().tid == tid {
-        return -1;
+## 互斥
+
+```rust
+// adder.rs
+
+static mut A: usize = 0;
+const THREAD_COUNT: usize = 4;
+const PER_THREAD: usize = 10000;
+fn main() {
+    let mut v = Vec::new();
+    for _ in 0..THREAD_COUNT {
+        v.push(std::thread::spawn(|| {
+            unsafe {
+                for _ in 0..PER_THREAD {
+                    A = A + 1;
+                }
+            }
+        }));
     }
-    let mut exit_code: Option<i32> = None;
-    let waited_task = process_inner.tasks[tid].as_ref();
-    if let Some(waited_task) = waited_task {
-        if let Some(waited_exit_code) = waited_task.inner_exclusive_access().exit_code {
-            exit_code = Some(waited_exit_code);
+    for handle in v {
+        handle.join().unwrap();
+    }
+    println!("{}", unsafe { A });
+}
+```
+
+以我们的多线程计数器 `adder.rs` 为例，状态转移过程如下：
+
+![../_images/adder-state-machine.png](./assets/adder-state-machine.png)
+
+这里我们将全局变量 `A` 视为一种资源，操作 `A=A+1` 为一个三阶段操作。我们可以用**有限状态自动机**来描述资源 `A` 和操作 `A=A+1` ：状态机中一共有 3 种状态，一个合法状态和两个不合法的中间状态 0 和 1。对于每次操作，第一条指令 `A` 从合法状态转移到中间状态 0；第二条指令 `A` 从中间状态 0 转移到中间状态 1；第三条指令 `A` 从中间状态 1 转移回合法状态。将操作块交错的情况代入到状态机中，最开始切换到 T0 之前 `A` 处于合法状态，接下来切换到 T0 执行了第一、二条指令之后 `A` 转移到中间状态 1，而此时操作系统切换到 T1 ， T1 又开始执行第一条指令。问题来了：我们发现中间状态 1 并没有定义此时再执行**第一条指令**应该如何转移。如果去执行的话，**就会产生未定义行为**并可能永远无法使 `A` 回到合法状态。不过，由于 `adder.rs` 中 `A` 只是一个整数，我们会发现 `A` 仍能回到合法状态，只是结果不对。如果换成一种复杂的数据结构，就会产生极其微妙且难以调试的结果。
+
+**共享资源** (Shared Resources) 是指多个线程均能够访问的资源。线程对于共享资源进行操作的那部分代码被称为 **临界区** (Critical Section)。在多线程并发访问某种共享资源的时候，为了正确性，必须要满足 **互斥** (Mutual Exclusion) 访问要求，即同一时间最多只能有一个线程在这种共享资源的临界区之内。
+
+**对于这种原生类型**，现代指令集架构额外提供一组 **原子指令** (Atomic Instruction) ，在某些架构上只需一条原子指令就能完成包括访存、算术运算在内的一系列功能。这就是说 `adder.rs` 中的 `A=A+1` 操作其实只需一条原子指令就能完成。如果这样做的话，我们相当于 **将临界区缩小为一条原子指令** ，这已经是处理器执行指令和时间片切分的最小单位，因此我们不使用任何保护手段也能满足互斥要求。
+
+在互斥锁没有释放的前提下，拥有锁的线程会一直执行，直到它完成了对共享资源的操作并释放了锁。这是因为互斥锁的设计目的是确保在任何时刻只有一个线程可以访问被保护的资源。**当一个线程成功获取了互斥锁并开始执行被保护的代码块时，其他试图获取同一把锁的线程将被阻塞，直到锁被释放**。所以上述代码可修改为：
+
+```rust
+use std::sync::Mutex;
+static mut A: usize = 0;
+static LOCK: Mutex<bool> = Mutex::new(true);
+const THREAD_COUNT: usize = 4;
+const PER_THREAD: usize = 10000;
+fn main() {
+    let mut v = Vec::new();
+    for _ in 0..THREAD_COUNT {
+        v.push(std::thread::spawn(|| {
+            for _ in 0..PER_THREAD {
+                let _lock = LOCK.lock();
+                unsafe { A = A + 1; }
+            }
+        }));
+    }
+    for handle in v {
+        handle.join().unwrap();
+    }
+    println!("{}", unsafe { A });
+}
+```
+
+但是，这只能保证获取锁的时候，线程阻塞，这个意思不等价于处理A的时候阻塞！
+
+
+
+锁机制有多种不同的实现。对于一种实现而言，我们常常用以下的指标来从多个维度评估这种实现是否能够正确、高效地达成锁这种互斥原语应有的功能：
+
+- 忙则等待：意思是当一个线程持有了共享资源的锁，此时资源处于繁忙状态，这个时候其他线程必须等待拿着锁的线程将锁释放后才有进入临界区的机会。这其实就是互斥访问的另一种说法。这种互斥性是锁实现中最重要的也是必须做到的目标，不然共享资源访问的正确性会受到影响。
+- **空闲则入** (在《操作系统概念》一书中也被称为 **前进** Progress)：若资源处于空闲状态且有若干线程尝试进入临界区，那么一定能够在有限时间内从这些线程中选出一个进入临界区。如果不满足空闲则入的话，可能导致即使资源空闲也没有线程能够进入临界区，对于锁来说是不可接受的。
+- **有界等待** (Bounded Waiting)：当线程获取锁失败的时候首先需要等待锁被释放，但这并不意味着此后它能够立即抢到被释放的锁，因为此时可能还有其他的线程也处于等待状态。于是它可能需要等待一轮、二轮、多轮才能拿到锁，甚至在极端情况下永远拿不到锁。 **有界等待** 要求每个线程在等待有限长时间后最终总能够拿到锁。相对的，线程可能永远无法拿到锁的情况被称之为 **饥饿** (Starvation) 。这体现了锁实现分配共享资源给线程的 **公平性** (Fairness) 。
+- 让权等待（可选）：线程如何进行等待实际上也大有学问。这里所说的让权等待是指需要等待的线程暂时主动或被动交出 CPU 使用权来让 CPU 做一些有意义的事情，这通常需要操作系统的支持。这样可以提升系统的总体效率。
+
+> **Rust Tips: 易失性读写 read/write_volatile**
+>
+> 有些时候，编译器会对一些访存行为进行优化。举例来说，如果我们写入一个内存位置并立即读取该位置，并且在同段时间内其他线程不会访问该内存位置，这意味着我们写入的值能够在 RAM  上保持不变。那么，编译器可能会认为读取到的值必定是此前写入的值，于是在最终的汇编码中读取内存的操作可能被优化掉。然而，有些时候，特别是访问  I/O 外设以 MMIO  方式映射的设备寄存器时，即使是相同的内存位置，对它进行读取和写入的含义可能完全不同，于是读取到的值和我们之前写入的值可能没有任何关系。连续两次读取同个设备寄存器也可能得到不同的结果。这种情况下，编译器对访存行为的修改显然是一种误优化。
+>
+> 于是，在访问 **I/O 设备寄存器或是与 RAM 特性不同**的内存区域时，就要注意通过 `read/write_volatile` 来确保编译器完全按照我们的源代码生成汇编代码而不会自作主张进行删除或者重排访存操作等优化。
+
+### 软件
+
+软件互斥的缺点：
+
+更为重要的是，这类算法存在着时代局限性，对 CPU 的内存访问有着比较严格的要求，因此这类算法是不能不加修改的运行在现代多核处理器上的。如果要保证其正确性，则要付出极大的性能开销，甚至得不偿失。
+
+#### 单标记互斥
+
+```rust
+static mut OCCUPIED: bool = false;
+
+unsafe fn lock() {
+    while vload!(OCCUPIED) {}
+    OCCUPIED = true;
+}
+
+unsafe fn unlock() {
+    OCCUPIED = false;
+}
+```
+
+我们使用一个新的全局变量 `OCCUPIED` 作为标记，表示当前是否有线程在临界区内。在 `lock` 的时候，我们等待 `OCCUPIED` 变为 false （注意这里的 `vload!` 来自用户库 `user_lib` ，基于临界区中用到的 `read_volatile` 实现，含义相同），这意味着没有线程在临界区内了，于是将标记修改为 true 并自己进入临界区。在退出临界区 `unlock` 的时候则只需将标记改成 false 。
+
+第 6 行不断 while 循环直到标记被改为 false ，在循环体内则不做任何事情，这是一种典型的 **忙等待** (Busy Waiting) 策略，它也被形象地称为 **自旋** (Spinning) 。
+
+###### 出问题
+
+单标记的步骤，分解：
+
+1. 将标记的值加载到寄存器 reg
+2. 条件跳转，如果 reg 为 1 则跳转回第一阶段开始新一轮循环；否则向下进行
+3. 将标记赋值为 1
+
+可能第3阶段返回值之后，被两个线程加载到寄存器
+
+###### 意见
+
+可以让这个OCCUPIED变成一个原子操作，每次只能有一个进程拥有他。但是这个原子操作不是作用在修改上，而是作用在获取上，一旦一个进城获取，他就要修改状态，所以**修改加获取**合并成原子操作。
+
+[见下方的原子操作](#原子操作)
+
+#### Peterson算法
+
+
+
+```rust
+/// 适用于两个线程
+
+// flag[i] = true，表示i线程想进入
+static mut flag:[bool;2] = [flag;2]
+
+// turn=i：表示轮到第i个线程进入
+let turn:usize = 0;
+
+unsafe lock(id:usize){
+        flag[id] = true;
+        let j = 1-id;
+        turn = j
+
+        // 如果第j个线程想进，而且轮到他了，自己就只能等待了
+        while(flag[j]&&turn[j]){}
+}
+
+unsafe unlock(id:usize){
+    flag[id] = false
+}
+```
+
+- 首先，这个算法适合两个线程
+- 可以看出问题的关键在于 $turn$。无论操作系统如何进行调度，在单核 CPU 上，线程$T_i$和线程$T_j$对于$turn$的 **修改总有一个在时间上靠后** 。
+
+- 满足：空闲则入，忙则等待，有界等待(不会饥饿)
+
+- flag相当于自己同意，turn相当于也得到对方同意，所以算法正确
+- 好像就这个算法需要考虑==CPU对内存访问顺序的优化改变==
+
+#### Dekker算法
+
+![image-20241101175639220](./assets/image-20241101175639220.png)
+
+
+
+算法思路与Peterson差不多，也是双线程算法(这两种算法的基本思路是相同的，但是`Dekkers`算法更容易推广到**多进程**的情况。因此，以下我们将尝试以`Dekkers`算法为基础，实现多进程的互斥访问。)
+
+- 先让自己想进；
+  - 如果对方不想进，我直接进临界区
+  - 对方想进(此时我也想进)
+    - 如果轮到我了，我直接进
+    - 如果没轮到我
+      - 自己不想进
+      - 等对方空闲则入，弄完，轮到我
+      - 我想进
+
+- 我进入临界区了，此时turn没轮到他，他进不来
+  - 我执行代码...
+  - 最后：我让对面进
+  - 我自己不想进了
+
+#### Eisenberg & McGuire多线程算法(待)
+
+#### Filter算法：N大于2时的Peterson算法(待)
+
+#### Lamport面包店算法(待)
+
+#### Szymanski算法(待)
+
+## 硬件
+
+### 关闭中断
+
+我们知道操作系统，特别是当线程处于临界区被切换出去的时候，将导致不同线程的临界区交错运行使得共享资源访问出错，进行的这种抢占式调度是由时钟中断触发的。如果应用程序能够控制中断的打开（使能）与关闭（屏蔽），那就能提供互斥解决方案了。
+
+```rust
+fn lock() {
+    disable_interrupt(); //屏蔽中断的机器指令
+}
+
+fn unlock() {
+    enable_interrupt(); //使能中断的机器指令
+}
+```
+
+首先，这种做法给了用户态程序使能/屏蔽中断这种特权，相当于相信应用并放权给它。这会面临和我们引入抢占式调度之前一样的问题：线程可以选择恶意永久关闭中断而独占所有 CPU 资源，这将会影响到整个系统的正常运行。因此，**事实上至少在 RISC-V  这样含多个特权级的架构中，这甚至是完全做不到的**。回顾第三章，可以看到中断使能和屏蔽的相关标志位分布在 S 特权级的 CSR `sstatus` 和 `sie` ，甚至更高的 M 特权级的 CSR  中。**用户态试图修改它们将会触发非法指令异常，操作系统会直接杀死该线程**。其次，即使我们能够做到，它对于多处理器架构也是无效的。假设同一进程的多个线程运行在不同的 CPU 上，它们都尝试访问同种共享资源。一般来说，每个 CPU  都有自己的独立的中断相关的寄存器，它只能对自己的中断处理进行设置。**对于一个线程来说，它可以关闭它所在 CPU  的中断，但是这无法影响到其他线程所在的 CPU  ，其他线程仍然可以在此时进入临界区**，便不能满足互斥访问的要求了。所以，采用控制中断的方式仅对一些非常简单，且信任应用的单处理器场景有效，而对于更广泛的其他场景是不够的。**屏蔽中断并不能在多核操作系统起作用**
+
+需要注意的是，这种关闭中断的方法作为用户态锁机制的实现很不靠谱，在实现内核态锁机制的时候有些情况下却是必不可少的。**我们将在第九章介绍位于内核态的一种基于关中断的锁实现**
+
+### 原子操作
+
+```rust
+static OCCUPIED: AtomicBool = AtomicBool::new(false);
+
+fn lock() {
+    while OCCUPIED
+    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+    .is_err()
+    {
+        yield_();
+    }
+}
+
+fn unlock() {
+    OCCUPIED.store(false, Ordering::Relaxed);
+}
+```
+
+这里我们将全局锁标记替换为原子 bool 类型 `AtomicBool` 。它支持 `AtomicBool::compare_exchange` 操作，接口定义如下：
+
+```
+pub fn compare_exchange(
+    &self,
+    current: bool,
+    new: bool,
+    success: Ordering,
+    failure: Ordering,
+) -> Result<bool, bool>;
+```
+
+其功能为：如果原子变量当前的值与 `current` 相同，则将原子变量的值修改为 `new` ，否则不进行修改。无论是否进行修改，都会返回原子变量在操作之前的值。==在这里就实现了修改加获取合并为原子操作==，然后搭配单标志互斥，美滋滋。
+
+#### CAS-**比较并交换**
+
+一种原子操作：
+
+```rust
+/// 效果的伪代码展示
+fn compare_and_swap(ptr: *mut i32, expected: i32, new: i32) -> i32 {
+    let original = unsafe { *ptr };
+    if original == expected {
+        unsafe { *ptr = new; }
+    }
+    original
+}
+```
+
+#### TAS-测试并设置
+
+ CAS 之外，曾经还有另一类常用来实现同步机制的原子指令，它被称为 **测试并设置** (Test-And-Set, TAS) 。相比 CAS ， TAS 没有比较的步骤，它直接将 `new` 写入到内存并返回内存位置原先的值。用 Rust 语言伪代码描述 TAS 的功能如下：
+
+```rust
+fn test_and_set(ptr: *mut i32, new: i32) -> i32 {
+    let original = unsafe { *ptr };
+    unsafe { *ptr = new };
+    original
+}
+```
+
+然后采用TAS实现的锁效果
+
+```rust
+static mut OCCUPIED: i32 = 0;
+
+unsafe fn lock() {
+    // 相比CAS而言，比较被放在外面
+    // 只有一次返回原来值0,其他都是1
+    while (test_and_set(&mut OCCUPIED, 1) == 1) {}
+}
+
+unsafe fn unlock() {
+    OCCUPIED = 0;
+}
+```
+
+#### LR/SC:加载保留与条件储存
+
+LR:LR 指令可以读取内存中的一个值（其地址保存在寄存器 `rs1` 中）到目标寄存器 `rd` 
+
+SC： SC 指令，它的功能是将内存中的这个值（其地址保存在寄存器 `rs1` 中且与 LR 指令中的相同）改成寄存器 `rs2` 保存的值。**但前提是：执行 LR 和 SC 这两条指令之间的这段时间内，内存中的这个值并未被修改。如果这个前提条件不满足，那么 SC 指令不会进行修改**
+
+那么 SC 指令是如何判断此前一段时间该内存中的值是否被修改呢？在 RISC-V 架构下，存在一个 **保留集**  (Reservation Set) 的概念，这也是“加载保留”这种叫法的来源。保留集用来实现 LR/SC 的检查机制：当 CPU 执行 LR  指令的时候，硬件会记录下此时内存中的值是多少，此外还可能有一些附加信息，这些被记录下来的信息就被称为保留集。之后，当其他 CPU  或者外设对内存这个值进行修改的时候，硬件可以将这个值对应的保留集标记为非法或者删除。等到之前执行 LR 指令的 CPU 执行 SC  指令的时候，CPU 就可以检查保留集是否存在/合法或者保留集记录的值是否与内存中现在的值一致，以这种方式来决定是否进行写入以及目标寄存器 `rd` 的值。
+
+
+
+RISC-V 并不原生支持 CAS/TAS 原子指令，但我们可以通过 LR/SC 指令对来实现它。比如下面是通过 LR/SC 指令对来模拟 CAS 指令。有兴趣的同学可以对照注释自行研究。
+
+```asm
+# 参数 a0 存放内存中的值的所在地址
+# 参数 a1 存放 expected
+# 参数 a2 存放 new
+# 返回值 a0 略有不同：这里若比较结果相同则返回 0 ，否则返回 1
+# 而不是返回 CAS 之前内存中的值
+cas:
+    lr.w t0, (a0) # LR 将值加载到 t0
+    bne t0, a1, fail # 如果值和 a1 中的 expected 不同，跳转到 fail
+    sc.w t0, a2, (a0) # SC 尝试将值修改为 a2 中的 new
+    bnez t0, cas # 如果 SC 的目标寄存器 t0 不为 0 ，说明 LR/SC 中间值被修改，重试
+    li a0, 0 # 成功，返回值为 0
+    ret # 返回
+fail:
+    li a0, 1 # 失败，返回值为 1
+    ret # 返回
+```
+
+让我们来对原子指令部分进行一个小结。为了提供软件所需的包含互斥锁在内的各种同步机制，**硬件对于内存中的一个字、双字、四字（位宽分别为16、32、64位，且通常要求是对齐的）这类通用的存储单位提供了一系列原子指令**，这些原子指令能够对内存中的值进行加载、运算、修改等多种操作，且能够保证整个过程是原子的。也就是说，在硬件层面上，**其原子性有着更高的优先级**而不会被中断、多个 CPU 同时访问内存中同个位置或者指令执行中的更多情况破坏。
+
+正因如此，我们才说：“ **原子指令是整个计算机系统中最根本的原子性和互斥性的来源** 。”这种最根本的互斥性来源于总线的仲裁，表现为原子指令，作用范围为基础存储单位。
+
+> 原子指令在多核中也是满足的
+>
+> 事实上，当多个 CPU 同时执行这些原子指令的时候，它们会将相关请求发送到 CPU 与 RAM  间总线上，总线会将这些请求进行排序。这就好像一群纷乱的游客在通过一个狭窄的隘口的时候必须单列排队通过，无论如何总会产生一种顺序。于是我们会看到，请求排在最前面的 CPU 能够成功，随后它便相当于独占了这一块被访问的内存区域。接下来，排在后面的 CPU 的请求都会失败了，这种状况会持续到之前独占的 CPU 将对应内存区域重置（相当于 `unlock` ）
+
+### 让权等待
+
+总体上说，若要以忙等方式进行等待，首先要保证忙等是有意义的，不然就只是单纯的在浪费 CPU 资源。怎样才算是有意义的忙等呢？那就是 **在忙等的时候被等待的条件有可能从不满足变为满足** 。比如说，一个线程占据 CPU 资源进行忙等的同时，另一个线程可以在另一个 CPU 上执行，外设也在工作，它们都可以修改内存使得条件得到满足。这种情况才有等待的价值。于是可以知道， **在单核环境下且等待条件不涉及外设的时候，一个线程的忙等是没有意义的** ，因为被等待的条件的状态不可能发生变化。
+
+忙等的优势是在条件成立的第一时间就能够进行响应，对于事件的响应延迟更低，实时性更好，而且不涉及开销很大的上下文切换。它的缺点则是不可避免的会浪费一部分 CPU 资源在忙等上。
+
+**为了克服忙等带来的资源和切换上下文的浪费**，在操作系统的协助下，我们可以对于等待进行更加精细的控制。为了避免等待事件的线程在事件到来之前被调度到而产生大量上下文切换开销，我们可以新增一种 **阻塞** (Blocking) 机制。**当线程需要等待事件到来的时候，操作系统可以将该线程标记为阻塞状态** (Blocked)  并将其从调度器的就绪队列中移除。由于操作系统每次只会从就绪队列中选择一个线程分配 CPU 资源，被阻塞的线程就不再会获得 CPU  使用权，也就避免了上下文切换。相对的，在线程要等待的事件到来之后，我们需要解除线程的阻塞状态，将线程状态改成就绪状态，并将线程重新加入到就绪队列，使其有资格得到 CPU 资源。这就是与阻塞机制配套的唤醒机制。
+
+阻塞机制的缺点在于会不可避免的产生两次上下文切换。站在等待的线程的视角，它会被切换出去再切换回来然后再继续执行。在事件产生频率较低、事件到来速度比较慢的情况下这不是问题，但当事件产生频率很高的时候直接忙等也许是更好的选择。
+
+> **为什么同样使用单标记，这里却无需用到原子操作？**
+>
+> 这里我们仅用到单标记 `locked` ，为什么无需使用原子指令来保证对于 `locked` 本身访问的互斥性呢？这其实是因为，RISC-V 架构规定从用户态陷入内核态之后所有（内核态）中断默认被自动屏蔽，也就是说与应用的执行不同， **目前系统调用的执行是不会被中断打断的** 。同时，目前我们是在单核上，也 **不会有多个 CPU 同时执行系统调用的情况** 。在这种情况下，内核态的共享数据访问就仍在 `UPSafeCell` 的框架之内，只要使用它就能保证互斥访问。
+
+## 互斥锁(Mutex)
+
+- 单标志的互斥锁
+
+```rust
+pub struct MutexSpin {
+    locked: UPSafeCell<bool>,
+}
+
+impl MutexSpin {
+    pub fn new() -> Self {
+        Self {
+            locked: unsafe { UPSafeCell::new(false) },
         }
-    } else {
-        // waited thread does not exist
-        return -1;
     }
-    if let Some(exit_code) = exit_code {
-        // dealloc the exited thread
-        process_inner.tasks[tid] = None;
-        exit_code
-    } else {
-        // waited thread has not exited
-        -2
+}
+
+impl Mutex for MutexSpin {
+    fn lock(&self) {
+        // locked = true的时候会返回，执行临界区；否则会yield
+        loop {
+            let mut locked = self.locked.exclusive_access();
+            if *locked {
+                drop(locked);
+                suspend_current_and_run_next();
+                continue;
+            } else {
+                *locked = true;
+                // 防止来回自由无条件进入
+                return;
+            }
+        }
     }
+
+    fn unlock(&self) {
+        let mut locked = self.locked.exclusive_access();
+        *locked = false;
+    }
+}
+
 ```
+
+
+
+- 基于阻塞的
+
+```rust
+/// 需要保存阻塞的队列
+pub struct MutexBlockingInner {
+    locked: bool,
+    wait_queue: VecDeque<Arc<TaskControlBlock>>,
+}
+
+impl MutexBlocking {
+    pub fn new() -> Self {
+        Self {
+            inner: unsafe {
+                UPSafeCell::new(MutexBlockingInner {
+                    locked: false,
+                    wait_queue: VecDeque::new(),
+                })
+            },
+        }
+    }
+}
+
+impl Mutex for MutexBlocking {
+    fn lock(&self) {
+        let mut mutex_inner = self.inner.exclusive_access();
+        if mutex_inner.locked {
+            mutex_inner.wait_queue.push_back(current_task().unwrap());
+            drop(mutex_inner);
+            block_current_and_run_next();
+        } else {
+            mutex_inner.locked = true;
+        }
+    }
+
+    fn unlock(&self) {
+        let mut mutex_inner = self.inner.exclusive_access();
+        assert!(mutex_inner.locked);
+        if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
+            wakeup_task(waking_task); // 唤醒的线程是初始化的falsw
+        } else {
+            mutex_inner.locked = false; // 如果没有可唤醒的线程，就让自己是false，可以直接进入临界区
+        }
+    }
+}
+```
+
+
+
+## 信号量(Semaphore)
+
+当我们需要一种线程间更灵活的同步访问需求，如要求同时最多只允许 N 个线程在临界区中访问共享资源，或让某个线程等待另外一个线程执行到某一阶段后再继续执行的同步过程等，互斥锁这种方式就有点力不从心了。
+
+> **同步** (Synchronization) 和 **互斥** (Mutual  Exclusion)  事实上是在多线程并发访问过程中出现的两种不同需求。同步指的是线程执行顺序上的一些约束，比如一个线程必须等待另一个线程执行到某个阶段之后才能继续向下执行；而互斥指的是多线程在访问共享资源的时候，同一时间最多只有一个线程能够在共享资源的临界区中。
+
+**信号量是一种同步原语，用一个变量或一种抽象数据类型实现，用于控制多个线程对共享资源的访问**。
+
+信号量支持两种操作：P 操作（来自荷兰语中的 Proberen ，意为尝试）和 V 操作（来自荷兰语中的 Verhogen ，意为增加），其中 P 操作表示线程尝试占用一个资源，而与之匹配的 V 操作表示线程将占用的资源归还。P 操作和 V 操作也是基于阻塞-唤醒机制实现的。当进行 P  操作的时候，如果此时没有可用的资源，则当前线程会被阻塞；而进行 V  操作的时候，如果返还之后有了可用的资源，且此时有线程被阻塞，那么就可以考虑唤醒它们。
+
+- 信号量的一种实现
+
+```rust
+fn P(S) {
+    if S >= 1
+        // 如果还有可用资源，更新资源剩余数量 S
+        S = S - 1;
+        // 使用资源
+    else
+        // 已经没有可用资源
+        // 阻塞当前线程并将其加入阻塞队列
+        <block and enqueue the thread>;
+}
+
+fn V(S) {
+    if <some threads are blocked on the queue>
+        // 如果已经有线程在阻塞队列中
+        // 则唤醒这个线程
+        <unblock a thread>;
+    else
+        // 否则只需恢复 1 资源可用数量
+        S = S + 1;
+}
+```
+
+- 信号量的第二种实现
+
+```rust
+fn P(S) {
+    S = S - 1;
+    if 0 > S then
+        // 阻塞当前线程并将其加入阻塞队列
+        <block and enqueue the thread>;
+}
+
+fn V(S) {
+    S = S + 1;
+    if <some threads are blocked on the queue>
+        // 如果已经有线程在阻塞队列中
+        // 则唤醒这个线程
+        <unblock a thread>;
+}
+```
+
+- 资源<=0时，p(S)会阻塞，
+- V(S)无条件唤醒线程
+
+##### 信号量的使用场景
+
+1. 信号量作为同步原语来解决条件同步问题；（能实现提醒的作用）
+2. 互斥
+3. 生产者和消费者基于一个有限缓冲进行协作的复杂问题。
+
+- N=1是互斥锁
+
+- N=0的信号量使用：
+
+当 N=0的时候，信号量就与资源管理无关了，而是可以用作一种比较通用的同步原语。比如，现在的需求是：线程 A 需要等待线程 B 执行到了某一阶段之后再向下执行。假设有一个N=0的信号量。那么，在线程 A 需要等待的时候可以对该信号量进行 P 操作，于是线程会被阻塞。在线程 B 执行完指定阶段之后再对该信号量进行 V 操作就能够唤醒线程 A 向下执行。
+
+![../_images/semaphore-sync.png](./assets/semaphore-sync.png)
+
+> **唤醒丢失问题**
+>
+> 在上面线程 A 和 B 的同步问题中，其实未必总先是线程 A 执行到 P 操作被阻塞住，然后线程 B 执行 V 操作唤醒线程 A  。也有另一种可能是线程 B 先执行 V 操作，随后线程 A 再执行 P 操作。那么在线程 B 执行 V  操作的时候，信号量的阻塞队列中是没有任何线程的，此时 B 无法唤醒 A 。但如果此时 B 什么都不做，那么之后 A 执行 P  操作陷入阻塞的时候就没有任何线程能够唤醒 A 了，这将导致 A 无法顺利执行。(pv必须成对出现)
+>
+> 这种问题被我们称为 **唤醒丢失** (Lost Wakeup) 问题。为了解决这个问题，我们需要 B 在进行 V 操作的时候即使没有线程需要唤醒，也需要一种方法将这次可能的唤醒记录下来。请同学思考我们在上面的信号量实现中是如何解决这个问题的。
+
+###### 同步互斥
+
+```rust
+// user/src/bin/sync_sem.rs
+
+const SEM_SYNC: usize = 0;
+
+unsafe fn first() -> ! {
+    sleep(10);
+    println!("First work and wakeup Second");
+    semaphore_up(SEM_SYNC);
+    exit(0)
+}
+
+unsafe fn second() -> ! {
+    println!("Second want to continue,but need to wait first");
+    semaphore_down(SEM_SYNC);
+    println!("Second can work now");
+    exit(0)
+}
+
+#[no_mangle]
+pub fn main() -> i32 {
+    // create semaphores
+    assert_eq!(semaphore_create(0) as usize, SEM_SYNC);
+    // create threads
+    let threads = vec![
+        thread_create(first as usize, 0),
+        thread_create(second as usize, 0),
+    ];
+    // wait for all threads to complete
+    for thread in threads.iter() {
+        waittid(*thread as usize);
+    }
+    println!("sync_sem passed!");
+    0
+}
+```
+
+###### 生产者和消费者
+
+- 空闲槽位资源,初始数量N等于缓冲区容量。生产者每次写入需要占用 1 个，消费者每次读取恢复 1 个；
+
+- 可用数据资源，初始数量 N=0（最开始缓冲区为空）。消费者每次读取占用 1 个，生产者每次写入恢复 1 个；
+
+- 将缓冲区以及相应指针（即 `front` 和 `tail` ）整体上视作一种共享资源，那么生产者和消费者的写入和读取都会对这个共享资源进行修改。注意 **信号量只保证无可用资源时进行阻塞，但并不保证访问共享资源的互斥性，甚至这可能是两种不同资源** 。因此，我们还需要引入互斥锁对缓冲区进行保护，这里使用一个N=1的二值信号量来实现。
+
+在这里我们需要理解，相当于生产者一个，消费者一个，缓存一个。
+
+```rust
+unsafe fn producer(id: *const usize) -> ! {
+    let id = *id;
+    for _ in 0..NUMBER_PER_PRODUCER {
+        // 生产者生产了，他需要知道有没有空闲槽位(有没有可用他不在乎)
+        semaphore_down(SEM_EMPTY);
+        // 进入缓存
+        semaphore_down(SEM_MUTEX);
+        BUFFER[TAIL] = id;
+        TAIL = (TAIL + 1) % BUFFER_SIZE;
+        // 出缓存
+        semaphore_up(SEM_MUTEX);
+        // 结束之后，可用资源多了
+        semaphore_up(SEM_AVAIL);
+    }
+    exit(0)
+}
+
+unsafe fn consumer() -> ! {
+    for _ in 0..PRODUCER_COUNT * NUMBER_PER_PRODUCER {
+        semaphore_down(SEM_AVAIL);
+        semaphore_down(SEM_MUTEX);
+        print!("{} ", BUFFER[FRONT]);
+        FRONT = (FRONT + 1) % BUFFER_SIZE;
+        semaphore_up(SEM_MUTEX);
+        semaphore_up(SEM_EMPTY);
+    }
+    println!("");
+    exit(0)
+}
+```
+
+信号量题目：
+
+- 几个对象，每个对象的资源有几种，然后分配信号量(生产者需要空闲empty缓存)
+- 每个对象执行操作的时候，首先确定自己资源够吗，会被阻塞？(先判断自己资源够的情况下，再判断能不能进缓存)
+- 然后互斥锁
+- 执行结束，带来的影响，其他信号量的变化
+
+不能先互斥锁，在操作对象：
+
+比如刚开始，消费者，占用缓存，其他人缓存必须等；然后消费者没资源，阻塞了，然后两边都阻塞了，死锁！！！
+
+## 条件变量
+
+```rust
+static mut A: usize = 0;
+unsafe fn first() -> ! {
+    A = 1;
+    ...
+}
+
+unsafe fn second() -> ! {
+    while A == 0 {
+      // 忙等直到 A==1
+    };
+    //继续执行相关事务
+}
+```
+
+目前有这么个需求，状态同步问题，如果基于**互斥锁**，就是：
+
+```rust
+unsafe fn first() -> ! {
+    mutex_lock(MUTEX_ID);
+    A = 1;
+    mutex_unlock(MUTEX_ID);
+    ...
+}
+
+unsafe fn second() -> ! {
+    mutex_lock(MUTEX_ID);
+    while A == 0 { }
+    mutex_unlock(MUTEX_ID);
+    //继续执行相关事务
+}
+```
+
+如果second先拿到所有权，那么就会**陷入死锁，对此修改一下,**类似于????，就是下面：
+
+```rust
+unsafe fn second() -> ! {
+    loop {
+        mutex_lock(MUTEX_ID);
+        if A == 0 {
+            mutex_unlock(MUTEX_ID);
+        } else {
+            mutex_unlock(MUTEX_ID);
+            break;
+        }
+    }
+    //继续执行相关事务
+}
+```
+
+为了取消来回切换上下文的报销，加入信号量(一旦要循环，就先让你阻塞)
+
+```rust
+unsafe fn first() -> ! {
+    mutex_lock(MUTEX_ID);
+    A = 1;
+    semaphore_up(SEM_ID);
+    mutex_unlock(MUTEX_ID);
+    ...
+}
+
+unsafe fn second() -> ! {
+    loop {
+        mutex_lock(MUTEX_ID);
+        if A == 0 {
+            mutex_unlock(MUTEX_ID);
+            semaphore_down(SEM_ID);
+        } else {
+            mutex_unlock(MUTEX_ID);
+            break;
+        }
+    }
+    //继续执行相关事务
+}
+```
+
+但是上述的例子，信号量能交换位置？不能，会导致死锁
+
+---
+
+从上面的例子可以看出，互斥锁和信号量能实现很多功能，但是它们对于程序员的要求较高，一旦使用不当就很容易出现难以调试的死锁问题。对于这种比较复杂的同步互斥问题，就可以用本节介绍的条件变量来解决。
+
+信号量加互斥锁的缺点：
+
+- 信号量本质上是一个整数，它不足以描述所有类型的等待条件/事件；
+- 在使用信号量的时候需要特别小心。比如，up 和 down 操作必须配对使用。而且在和互斥锁组合使用的时候需要注意操作顺序，不然容易导致死锁。
+
+管程是一个由**过程**（Procedures，是 Pascal 语言中的术语，等同于我们今天所说的函数）、**共享变量及数据结构等**组成的一个集合，体现了面向对象思想。**编程语言负责提供管程的底层机制**，程序员则可以**根据需求设计自己的管程**，包括自定义管程中的过程和共享资源。**线程只需调用管程中的过程即可，过程会对管程中线程间的共享资源进行操作**。需要注意的是，**管程中的共享资源不允许直接访问**，而是只能通过管程中的过程间接访问，这是在编程语言层面对共享资源的一种保护，与 C++/Java 等语言中类的私有成员类似。
+
+### 管程
+
+```rust
+type Queue<T> = Vec<T>;
+/// 管程
+struct Monitor {
+    // 共享变量
+    saved: i32,
+    full: bool,
+    // 条件变量
+    fullq: Queue<()>,
+    emptyq: Queue<()>,
+}
+/// 过程
+impl Monitor {
+        fn put(&mut self, item: i32) {
+                if self.full {
+                        // 这里假设简单的阻塞操作，实际可能更复杂
+                       delay()
+                }
+                self.saved = item;
+                self.full = true;
+                // 这里假设简单的唤醒操作，实际可能更复杂
+               continue()
+        }
+}
+```
+
+阻塞和唤醒操作分别叫做 `delay` 和 `continue` ，它们都是在数据类型 `Queue` 上进行的。这里的 `Queue` 本质上是一个阻塞队列： `delay` 会将当前线程阻塞并加入到该阻塞队列中；而 `continue` 会从该阻塞队列中移除一个线程并将其唤醒。今天我们通常将这个 `Queue` 称为 **条件变量** (Condition Variable) ，而将条件变量的阻塞和唤醒操作分别叫做 `wait` 和 `signal` 。
+
+![管程和条件变量示意图](./assets/monitor-condvar.png)
+
+> 注：自旋锁是指一直等的时候，还占系统资源，一直while{}忙等
+
+每个条件变量都有一个自己的阻塞队伍，一个管程可能有多个条件变量。
+
+管程是编程语言的组成部分，编译器知道其特殊性，因此可以采用与其他过程调用不同的方法来处理对管程的调用，**比如编译器可以在管程中的每个过程的入口/出口处自动加上互斥锁的获取/释放操作。这一过程对程序员是透明的，降低了程序员的心智负担，也避免了程序员误用互斥锁而出错。**
+
+注意条件变量与管程过程自带的互斥锁是如何交互的：**当调用条件变量的 `wait` 操作阻塞当前线程的时候，注意到该操作是在管程过程中，因此此时当前线程是持有锁的**。经验告诉我们 **不要在持有锁的情况下陷入阻塞** ，因此在陷入阻塞状态之前当前线程必须先释放锁；当被阻塞的线程被其他线程使用 `signal` 操作唤醒之后，需要重新获取到锁才能继续执行，不然的话就无法保证管程过程的互斥访问。因此，站在线程的视角，必须持有锁才能调用条件变量的 `wait` 操作阻塞自身，且 `wait` 的功能按顺序分成下述多个阶段，由编程语言保证其原子性：
+
+- 释放锁；
+- 阻塞当前线程；
+- 当前线程被唤醒之后，重新获取到锁。
+- `wait` 返回，当前线程成功向下执行。
+
+> > important
+>
+> 由于互斥锁的存在， `signal` 操作也不只是简单的唤醒操作。当线程$T_1$在执行过程（位于管程过程中）中发现某条件满足准备唤醒线程$T_2$的时候，如果直接让线程$T_2$继续执行（也位于管程过程中），就会违背管程过程的互斥访问要求。因此，问题的关键是，在$T_1$唤醒$T_2$的时候，$T_1$​如何处理它正持有的锁。具体来说，根据相关线程的优先级顺序，唤醒操作有这几种语义：
+>
+> - Hoare 语义：优先级$T_2>T_1>other\ processes$。也就是说，当$T_1$发现条件满足之后，立即通过 `signal` 唤醒$T_2$并 **将锁转交** 给$T_2$，这样$T_2$就能立即继续执行，而 $T_1$ 则暂停执行并进入一个 *紧急等待队列* 。当 $T_2$退出管程过程后会将锁交回给紧急等待队列中的 $T_1$ ，从而 $T_1$可以继续执行。
+>
+> - Hansen 语义：优先级 $T_2>T_1>other\ processes$。即$T_1$ 发现条件满足之后，先继续执行，直到退出管程之前再使用 `signal` 唤醒并 **将锁转交** 给$T_2$ ，于是 $T_2$可以继续执行。**注意在 Hansen 语义下， `signal` 必须位于管程过程末尾。**
+>
+> - Mesa 语义：优先级$T_2>T_1=other\ processes$ 。即$T_1$发现条件满足之后，就可以使用 `signal` 唤醒  ，但是并$T_2$**不会将锁转交** 给 $T_2$ 。这意味着在$T_1$退出管程过程释放锁之后，$T_2$还需要和其他线程竞争，直到抢到锁之后才能继续执行。
+>
+> **总结**
+>
+> hoare和Hansen**被唤醒之后其等待的条件一定是成立的** （因为$T_1$和$T_2$ 中间没有其他线程），因此 **没有必要重复检查条件是否成立就可以向下执行** 。
+>
+> 而Mesa由于公平竞争，导致可能轮到他时，任务又不满足了。需要仿佛确认！
+
+在使用 `wait` 操作进行条件等待的时候，通常有以下两种方式：
+
+```rust
+// 第一种方法，基于 if/else；知道wait返回之后，条件一定成立
+if (!condition) {
+    wait();
+} else {
+    ...
+}
+
+// 第二种方法，基于 while；wait返回之后，条件成立与否未知
+while (!condition) {
+    wait();
+}
+```
+
+
+
+- 条件变量 -> 信号量 -> 通知
+
+- 互斥锁是进入临界区，开始处理
+
+**在使用条件变量的时候需要特别注意** ==唤醒丢失==  **问题** 。也就是说和信号量不同，如果调用 `signal` 的时候没有任何线程在条件变量的阻塞队列中，那么这次 `signal` 不会有任何效果，这次唤醒也不会被记录下来。对于这个例子来说，我们在 `first` 中还会修改 `A` ，因此如果 `first` 先执行，即使其中的 `signal` 没有任何效果，之后执行 `second` 的时候也会发现条件已经满足而不必进入阻塞。
+
+
+
+条件变量通过互斥锁知道阻塞哪些线程
+
+```rust
+
+const THREAD_NUM: usize = 3;
+
+struct Barrier {
+    mutex_id: usize,
+    condvar_id: usize,
+    count: UnsafeCell<usize>,
+}
+
+impl Barrier {
+    pub fn new() -> Self {
+        Self {
+            mutex_id: mutex_create() as usize,
+            condvar_id: condvar_create() as usize,
+            count: UnsafeCell::new(0),
+        }
+    }
+    pub fn block(&self) {
+        mutex_lock(self.mutex_id);
+        let count = self.count.get();
+        // SAFETY: Here, the accesses of the count is in the
+        // critical section protected by the mutex.
+        unsafe { *count = *count + 1; }
+        if unsafe { *count } == THREAD_NUM {
+            condvar_signal(self.condvar_id);
+        } else {
+            condvar_wait(self.condvar_id, self.mutex_id);
+            condvar_signal(self.condvar_id);
+        }
+        mutex_unlock(self.mutex_id);
+    }
+}
+
+unsafe impl Sync for Barrier {}
+
+lazy_static! {
+    static ref BARRIER_AB: Barrier = Barrier::new();
+    static ref BARRIER_BC: Barrier = Barrier::new();
+}
+
+fn thread_fn() {
+    for _ in 0..300 { print!("a"); }
+    BARRIER_AB.block();
+    for _ in 0..300 { print!("b"); }
+    BARRIER_BC.block();
+    for _ in 0..300 { print!("c"); }
+    exit(0)
+}
+```
+
+可以将 `thread_fn` 分成打印字符 a、打印字符 b 和打印字符 c 这三个阶段。考虑这样一种同步需求：即在阶段间设置 **同步屏障** ，只有 *所有的* 线程都完成上一阶段之后，这些线程才能够进入下一阶段。
+
+条件变量普遍写法：
+
+- 互斥锁
+- 在必要关键点加入过程，过程里
+  - 临界条件-唤醒一个线程  - 释放锁
+  - 否则都堵塞；如果被唤醒了，继续唤醒，释放锁
+- 互斥开
+
+不用考虑太多，就互斥夹住里面，然后临界就唤醒，否则就都堵塞；堵塞出来的，他获得所有权，继续唤醒，因为一会他要丢锁
+
+
+
+
+
+不知道条件变量的意义，咋用，存在的意义？
+
+如果线程在条件变量wait出来的时候，被分配锁了，**然后其他线程这个时间久进不来这个区域了**；想用这个锁，会被互斥锁堵塞，不过队列不在条件变量的队列里，而是互斥锁。
+
+
+
+# 并发问题
+
+## 并发缺陷
+
+互斥缺陷也称为违反原子性缺陷，在并发应用程序中**对共享变量没进行合理的保护**是导致出现这类缺陷的一个重要原因。
+
+```rust
+static mut A: usize = 0;
+//... other code
+unsafe fn thr1() -> ! {
+    if (A == 0) {
+      println!("thr1: A is Zero  --> {}", A);
+    }
+    //... other code
+}
+unsafe fn thr2() -> ! {
+    A = A+1;
+    println!("thr2: A is One  --> {}", A);
+}
+```
+
+在代码执行到第4行时，判断A=0,即将进入第五行的时候，执行`thr2`线程，然后继续执行第5行的时候，输出A=1
+
+**原因：**线程在对共享变量进行访问时，违反了临界区的互斥性（原子性）原则。解决这样的问题需要给共享变量的访问加锁，确保每个线程访问共享变量时，都持有锁。但是对于**两次有密切联系的代码**，需要放在一个锁里。
+
+## 同步缺陷
+
+同步缺陷也称为违反顺序缺陷，在并发应用程序中**对共享变量访问的先后顺序的可能性没有充分分析**是导致出现这类缺陷的一个重要原因。
+
+```rust
+static mut A: usize = 0;
+...
+unsafe fn thr1() -> ! {
+   ...    //在某种情况下会休眠
+   A = 1;
+   ...
+}
+unsafe fn thr2() -> ! {
+   if A==1 {
+      println!("Correct");
+   }else{
+      println!("Panic");
+   }
+}
+pub fn main() -> i32 {
+   let mut v = Vec::new();
+   v.push(thread_create(thr1 as usize, 0));
+   sleep(10);
+   ...
+   v.push(thread_create(thr2 as usize, 0));
+   ...
+}
+```
+
+本来想先先执行thr1的，却有可能thr2先执行了
+
+## 死锁缺陷
+
+```rust
+unsafe fn thr1() -> ! {
+   mutex1.lock();
+   mutex2.lock();
+   ...
+}
+unsafe fn thr2() -> ! {
+   mutex2.lock();
+   mutex1.lock();
+   ...
+}
+```
+
+两个线程分别死锁，占有其他线程资源
+
+### 死锁预防
+
+死锁的四个必要条件
+
+- 互斥：线程互斥地访问资源。
+- 持有并等待：线程已持有了部分资源，同时又在等待其他资源。
+- 非抢占：线程已持有的资源不能被抢占。
+- 循环等待：线程之间存在一个资源持有/等待的环，环上每个线程都持有部分资源，而这部分资源又是下一个线程在等待申请的资源。
+
+> 如果线程间产生了死锁，那么**上面四个条件一定会发生**。换个角度来看，如果这四个条件中的任意一个没有满足，死锁就不会产生。
+
+一个比较实用的预防死锁的方法是打破循环等待，具体做法就是给锁/访问的资源进行排序，要求每个线程都按照排好的顺序依次申请锁和访问资源。这种顺序性避免了循环等待，也就不会产生死锁。对所有资源进行排序，按照顺序申请资源，释放资源时按相反的顺序释放。这样可以确保进程在申请资源时不会形成循环等待。
+
+
+
+
+
+假设A<B<C，？？？？运行之前需要提前准备好所有数据？？？？
+
+如果A申请的资源1被B拿走，那么A提前进入死锁，B之后需要的资源不会被A申请。
+
+如果C需要的资源被B拿走，那么在最初申请的时候，C应该被阻塞，B不可能被拿走；如果之后B拿走C的资源，说明B此时需要的资源都够，B还能继续执行！
+
+
+
+### 死锁避免
+
+银行家算法：不安全状态并不等于死锁，而是指有死锁的可能性。安全状态和不安全状态的区别是：从安全状态出发，操作系统通过调度线程执行序列，能够保证所有线程都能完成，一定不会出现死锁；而从不安全状态出发，就没有这样的保证，可能出现死锁。

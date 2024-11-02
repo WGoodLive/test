@@ -3,6 +3,7 @@
 mod fs;
 mod process;
 mod thread;
+mod sync;
 use crate::task::action::SignalAction;
 pub use crate::task::processor::*;
 use fs::{sys_close, sys_dup, sys_open, sys_read, sys_write};
